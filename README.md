@@ -1,12 +1,18 @@
-# Token Dashboard
+# Token Meter
 
 A local dashboard that reads the JSONL transcripts Claude Code writes to `~/.claude/projects/` and turns them into per-prompt cost analytics, tool/file heatmaps, subagent attribution, cache analytics, project comparisons, and a rule-based tips engine.
 
 **Everything runs locally.** No data leaves your machine — no telemetry, no API calls for your data, no login.
 
-![Overview tab — totals and daily charts](docs/images/dashboard-overview-top.jpg)
+![Overview — cost, trend, per-metric sparklines, where it went, and what's worth fixing](docs/images/overview-dark.jpg)
 
-![Overview tab — per-project, per-model, top tools, recent sessions](docs/images/dashboard-overview-bottom.jpg)
+Light and dark, switched from the header and remembered per machine. With no saved choice it follows your OS.
+
+![The same Overview in the light theme](docs/images/overview-light.jpg)
+
+![Savings — what caching saved, what your own changes saved, and what a prompt costs you now](docs/images/overview-savings.jpg)
+
+> Project names and file paths in these screenshots are blurred by the app's own privacy toggle (`⌘/Ctrl + B`), not edited afterwards.
 
 ## What this is useful for
 
@@ -90,18 +96,61 @@ Change the port: `PORT=9000 python3 cli.py dashboard`.
 
 ## The tabs
 
-The dashboard is a single page with a hash-router tab bar across the top. Each tab is backed by its own JSON API under `/api/`:
+Three, plus a gear. Each view is backed by its own JSON API under `/api/`:
 
-- **Overview** — all-time input/output/cache tokens, sessions, turns, estimated cost on your chosen plan, daily work and cache-read charts, tokens-by-project, token share by model, top tools by call count, and recent sessions. This is the landing tab.
-- **Prompts** — your most expensive user prompts ranked by tokens. Click any row to see the assistant response, tool calls made, and the size of each tool result.
-- **Sessions** — turn-by-turn view of any single session, with per-turn tokens and tool calls.
-- **Projects** — per-project comparison: tokens, session counts, and which files were touched most.
-- **Skills** — which skills you invoke most often, and (where we can measure them) their token cost. See [limitations](docs/KNOWN_LIMITATIONS.md#skills-token-counts-are-partial).
-- **Savings** — what your optimizations were worth. See below.
-- **Tips** — rule-based suggestions for reducing token usage (repeated file reads, oversized tool results, low cache-hit rate, etc.).
-- **Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere else reflect your actual plan, and read the full rate table.
+- **Overview** — the landing tab. The headline is the period's **estimated cost** — what the work would have cost at pay-as-you-go API rates. On a subscription that isn't money you spent, so the line underneath puts it in proportion: *85× your $100/mo Max plan*, the same shape as ROAS, read the same way. On `api` billing there's no subscription to divide by and the multiple is left off. Below it, the daily cost trend and how the period compares with the one before it; six stat tiles (sessions, prompts, input, output, cache read, cache create) each with their own sparkline; spend ranked by project; and cost share by model. Alongside it, **Worth fixing** — the rule-based suggestions (repeated file reads, oversized tool results, low cache-hit rate) that used to live on their own tab, where nothing navigated to them.
+- **Activity** — the same spend sliced four ways behind a segmented switch:
+  - **Sessions** — every run, newest first. Open one for the turn-by-turn detail with per-turn tokens and tool calls.
+  - **Prompts** — individual prompts ranked by tokens or recency. Click a row for the full text and what it cost.
+  - **Projects** — per-project cost, sessions, prompts, billable tokens and cache reads.
+  - **Skills** — which skills fire most, and what each loads into context when it does. See [limitations](docs/KNOWN_LIMITATIONS.md#skills-token-counts-are-partial).
+  - **Tools** — which tools get called, how often, and where from.
+- **Savings** — what your optimizations were actually worth. See below.
+- **⚙ Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere reflect your real plan, and read the full rate table.
 
-The Overview tab also has a built-in "What do these numbers mean?" panel that explains input/output/cache tokens in plain English.
+Old bookmarks still work: `#/prompts`, `#/sessions`, `#/projects`, `#/skills` and `#/tips` redirect to their new homes.
+
+The Overview also carries a "What do these numbers mean?" panel explaining input/output/cache tokens in plain English, and every figure with a caveat carries an ⓘ that states it.
+
+### Drilling in
+
+A strip at the top shows the **current 5-hour window** — prompts, turns, billable tokens and what they'd cost. There is deliberately no "remaining" figure: your cap is never written to disk (`/status` asks Anthropic for it live), so a percentage here would be a guess dressed as a measurement.
+
+Every chart on the Overview is a question you can open, and each opens as a focused layer rather than expanding the page — Escape or ✕ to close:
+
+| Click | You get |
+|---|---|
+| a day on the cost trend | that day by model, by project, its biggest sessions, and every tool it called |
+| a slice of **By model** | which projects used that model, and its day-by-day spend |
+| a row or bar in **Activity → Tools** | where that tool is called from, and its day-by-day call count |
+| any **stat tile** (sessions, prompts, input, output, cache read, cache create) | that metric split by project, by model, by day, and its biggest sessions |
+
+A day's panel leads with **the prompts that cost the most** — text, project, model, turns and time — so an expensive Tuesday resolves to the handful of prompts that made it expensive.
+
+On **Savings**, the *Work delivered* and *Caching* tiles open the same kind of layer: a Sessions/Prompts switch, a sort control (biggest, newest, oldest, by project), a one-line summary ("the top 12 account for $14,533 of $49,133 — 30%"), and ranked bars so proportion reads without arithmetic. **Show all** swaps in the complete sortable table — every session and every prompt, sortable by any column.
+
+*Your own improvements* has no such list, deliberately: it's a rate measured against your own worst week, so no prompt or session owns any part of it. The endpoint returns 400 rather than manufacture an attribution, and a test holds that line.
+
+### Is the data right?
+
+`python3 tools/audit_data.py`, with the dashboard running. It recomputes every figure a second way — overview totals against raw SQL, each component endpoint summing back to the total, prompt attribution completeness, the savings drill-down reconciling with its headline, every breakdown agreeing with the chart that opens it — and exits non-zero if anything disagrees.
+
+*Saved by your changes* deliberately does not. It's the sum, day by day, of how far under your own worst week you came — a comparison between two rates, not a cost carried by any particular prompt. Clicking it says so and points at the two cards that do decompose it. The endpoint returns 400 rather than manufacture an attribution, and there's a test holding that line.
+
+### Live updates
+
+The scanner picks up new sessions every 30 seconds, and **every tab updates when it does** — figures tick, charts move, and your scroll position is held. The `● live` pill in the header pulses each time.
+
+Updates wait rather than interrupt: while a breakdown is open or you're typing in a field, the pill reads **new data** and the refresh lands the moment you close or click away.
+
+### Header controls
+
+| Control | What it does |
+|---|---|
+| `api` / `max` pill | The billing mode cost is shown in. Change it in Settings. |
+| ● live | Green when the page is updating itself. Click when it reads **new data** to pull changes into a view that doesn't auto-refresh. |
+| eye-off icon | Blurs prompt text, project names and file paths — for screenshots and screen-shares. Also `⌘/Ctrl + B`. |
+| ☀ / ☾ | Light or dark. Remembered on this machine; follows your OS until you choose. |
 
 ## Savings
 
@@ -131,7 +180,7 @@ Costs there are **API-equivalent**: if your Codex runs go through a ChatGPT subs
 python3 cli.py glance | python3 -m json.tool
 ```
 
-It exists for external panels that want one fetch instead of seven tab endpoints. Here it feeds the ADA HUD's `/tokens` view (`lib/tokens.ts` in the `ada-hud` repo shells out to this command). Nothing but JSON goes to stdout, so it pipes cleanly.
+It exists for external panels that want one fetch instead of a handful of separate endpoints. Here it feeds the ADA HUD's `/tokens` view (`lib/tokens.ts` in the `ada-hud` repo shells out to this command). Nothing but JSON goes to stdout, so it pipes cleanly.
 
 ## Troubleshooting
 

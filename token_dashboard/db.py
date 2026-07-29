@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Union
@@ -366,10 +367,17 @@ def session_turns(db_path, session_id: str) -> list:
 
 
 def daily_token_breakdown(db_path, since=None, until=None) -> list:
-    """One row per day: stacked bar data for input/output/cache_read/cache_create."""
+    """One row per day: tokens, plus the session and prompt counts.
+
+    The counts are here rather than in a second query because every stat tile on
+    the overview draws a sparkline from this one response — a tile that shows a
+    total with no trend under it, next to five that have one, reads as broken.
+    """
     rng, args = _range_clause(since, until)
     sql = f"""
       SELECT substr(timestamp, 1, 10) AS day,
+             COUNT(DISTINCT session_id) AS sessions,
+             SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
              COALESCE(SUM(input_tokens),0)      AS input_tokens,
              COALESCE(SUM(output_tokens),0)     AS output_tokens,
              COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
@@ -428,3 +436,349 @@ def model_breakdown(db_path, since=None, until=None) -> list:
     """
     with connect(db_path) as c:
         return [dict(r) for r in c.execute(sql, args)]
+
+
+def _grouped_model_breakdown(db_path, key_col, key_alias, since, until, where) -> list:
+    """Per-(something, model) token totals, shaped for `cost_for`.
+
+    A day's tokens cannot be priced without the model split: a day of Haiku and
+    a day of Opus with identical token counts are an order of magnitude apart.
+    Same for a project. So anywhere a cost is wanted per bucket, the bucket has
+    to be broken down by model first and summed after pricing.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      SELECT {key_col} AS {key_alias},
+             COALESCE(model, 'unknown') AS model,
+             COALESCE(SUM(input_tokens),0)            AS input_tokens,
+             COALESCE(SUM(output_tokens),0)           AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
+        FROM messages
+       WHERE type = 'assistant' {where} {rng}
+       GROUP BY {key_alias}, model
+    """
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]
+
+
+_TOKEN_SUMS = """
+             COALESCE(SUM(input_tokens),0)            AS input_tokens,
+             COALESCE(SUM(output_tokens),0)           AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
+"""
+
+
+def _resolve_names(c, rows):
+    """Fill project_name from the cwds seen for each slug, one query per slug."""
+    cache = {}
+    for r in rows:
+        slug = r.get("project_slug")
+        if slug is None:
+            continue
+        if slug not in cache:
+            cwds = [row["cwd"] for row in c.execute(
+                "SELECT DISTINCT cwd FROM messages WHERE project_slug=? AND cwd IS NOT NULL",
+                (slug,),
+            )]
+            cache[slug] = best_project_name(cwds, slug)
+        r["project_name"] = cache[slug]
+    return rows
+
+
+def day_detail(db_path, day: str) -> dict:
+    """Everything that made one day cost what it did.
+
+    The overview's cost line invites exactly one question — "why was that
+    Tuesday $700?" — and until this existed the chart could not answer it.
+    Model and project rows carry raw token columns so the caller can price them;
+    tools and sessions are counts, which need no pricing.
+    """
+    like = day + "%"
+    with connect(db_path) as c:
+        models = [dict(r) for r in c.execute(f"""
+            SELECT COALESCE(model,'unknown') AS model, COUNT(*) AS turns, {_TOKEN_SUMS}
+              FROM messages
+             WHERE type='assistant' AND timestamp LIKE ?
+             GROUP BY model
+        """, (like,))]
+        # Split by model as well as project: a project's cost can't be derived
+        # from its token total alone, since the rate depends on which model
+        # spent them. The caller prices each row and folds them together.
+        projects = [dict(r) for r in c.execute(f"""
+            SELECT project_slug, COALESCE(model,'unknown') AS model, {_TOKEN_SUMS}
+              FROM messages
+             WHERE type='assistant' AND timestamp LIKE ?
+             GROUP BY project_slug, model
+        """, (like,))]
+        _resolve_names(c, projects)
+        tools = [dict(r) for r in c.execute("""
+            SELECT tool_name, COUNT(*) AS calls,
+                   COALESCE(SUM(result_tokens),0) AS result_tokens
+              FROM tool_calls
+             WHERE tool_name != '_tool_result' AND timestamp LIKE ?
+             GROUP BY tool_name ORDER BY calls DESC LIMIT 8
+        """, (like,))]
+        sessions = [dict(r) for r in c.execute("""
+            SELECT session_id, project_slug,
+                   MIN(timestamp) AS started,
+                   SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
+                   COALESCE(SUM(input_tokens),0)+COALESCE(SUM(output_tokens),0)
+                     +COALESCE(SUM(cache_create_5m_tokens),0)
+                     +COALESCE(SUM(cache_create_1h_tokens),0) AS billable_tokens
+              FROM messages
+             WHERE timestamp LIKE ?
+             GROUP BY session_id
+             ORDER BY billable_tokens DESC LIMIT 8
+        """, (like,))]
+        _resolve_names(c, sessions)
+    return {"day": day, "models": models, "projects": projects,
+            "tools": tools, "sessions": sessions}
+
+
+def model_detail(db_path, model: str, since=None, until=None) -> dict:
+    """One model's spend, split by project and by day."""
+    rng, args = _range_clause(since, until)
+    with connect(db_path) as c:
+        projects = [dict(r) for r in c.execute(f"""
+            SELECT project_slug, COALESCE(model,'unknown') AS model,
+                   COUNT(*) AS turns, {_TOKEN_SUMS}
+              FROM messages
+             WHERE type='assistant' AND COALESCE(model,'unknown')=? {rng}
+             GROUP BY project_slug
+        """, (model, *args))]
+        _resolve_names(c, projects)
+        days = [dict(r) for r in c.execute(f"""
+            SELECT substr(timestamp,1,10) AS day, COALESCE(model,'unknown') AS model,
+                   COUNT(*) AS turns, {_TOKEN_SUMS}
+              FROM messages
+             WHERE type='assistant' AND COALESCE(model,'unknown')=?
+               AND timestamp IS NOT NULL {rng}
+             GROUP BY day ORDER BY day ASC
+        """, (model, *args))]
+    return {"model": model, "projects": projects, "days": days}
+
+
+def tool_detail(db_path, tool: str, since=None, until=None) -> dict:
+    """One tool's usage, split by project and by day. Calls, not cost.
+
+    A tool call's token cost isn't recorded against the call, so pricing one
+    would mean inventing a number — the same reason the savings page refuses to
+    put a dollar figure on a file read.
+    """
+    rng, args = _range_clause(since, until)
+    with connect(db_path) as c:
+        projects = [dict(r) for r in c.execute(f"""
+            SELECT project_slug, COUNT(*) AS calls,
+                   COALESCE(SUM(result_tokens),0) AS result_tokens
+              FROM tool_calls
+             WHERE tool_name=? {rng}
+             GROUP BY project_slug ORDER BY calls DESC LIMIT 10
+        """, (tool, *args))]
+        _resolve_names(c, projects)
+        days = [dict(r) for r in c.execute(f"""
+            SELECT substr(timestamp,1,10) AS day, COUNT(*) AS calls,
+                   COALESCE(SUM(result_tokens),0) AS result_tokens
+              FROM tool_calls
+             WHERE tool_name=? AND timestamp IS NOT NULL {rng}
+             GROUP BY day ORDER BY day ASC
+        """, (tool, *args))]
+        totals = dict(c.execute("""
+            SELECT COUNT(*) AS calls,
+                   COALESCE(SUM(result_tokens),0) AS result_tokens,
+                   COUNT(DISTINCT session_id) AS sessions
+              FROM tool_calls WHERE tool_name=?
+        """, (tool,)).fetchone())
+    return {"tool": tool, "projects": projects, "days": days, "totals": totals}
+
+
+def session_model_rows(db_path, since=None, until=None) -> list:
+    """(session, model) token sums — the grain a session's cost can be priced at.
+
+    Returned for every session rather than a top-N, because "top" here means top
+    by cost, and cost isn't known until after pricing. A few thousand rows is
+    cheap; guessing the ranking beforehand is not.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      SELECT session_id, project_slug, COALESCE(model,'unknown') AS model,
+             MIN(timestamp) AS started, {_TOKEN_SUMS}
+        FROM messages
+       WHERE type='assistant' {rng}
+       GROUP BY session_id, model
+    """
+    with connect(db_path) as c:
+        rows = [dict(r) for r in c.execute(sql, args)]
+        _resolve_names(c, rows)
+    return rows
+
+
+# Each stat tile on the overview can be opened. The value is a SQL expression
+# and `rows` says which messages it is summed over — counting prompts over
+# assistant rows, or output tokens over user rows, would both be nonsense.
+METRICS = {
+    "sessions":     {"expr": "COUNT(DISTINCT session_id)", "rows": "all",       "label": "sessions"},
+    "turns":        {"expr": "COUNT(*)",                   "rows": "prompts",   "label": "prompts"},
+    "input":        {"expr": "SUM(input_tokens)",          "rows": "assistant", "label": "input tokens"},
+    "output":       {"expr": "SUM(output_tokens)",         "rows": "assistant", "label": "output tokens"},
+    "cache_read":   {"expr": "SUM(cache_read_tokens)",     "rows": "assistant", "label": "cache read tokens"},
+    "cache_create": {"expr": "SUM(cache_create_5m_tokens)+SUM(cache_create_1h_tokens)",
+                     "rows": "assistant", "label": "cache create tokens"},
+}
+
+_ROW_FILTER = {
+    "all": "",
+    "assistant": "AND type='assistant'",
+    "prompts": "AND type='user' AND prompt_text IS NOT NULL",
+}
+
+
+def current_window(db_path, hours: int = 5) -> list:
+    """Per-model usage inside the rolling window Claude Code meters you on.
+
+    The caller prices it. There is deliberately no "remaining" figure: your cap
+    is never written to disk — `/status` asks Anthropic for it live — so any
+    percentage here would be a guess dressed as a measurement.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    sql = f"""
+      SELECT COALESCE(model,'unknown') AS model, COUNT(*) AS turns, {_TOKEN_SUMS}
+        FROM messages
+       WHERE type='assistant' AND timestamp >= ?
+       GROUP BY model
+    """
+    with connect(db_path) as c:
+        rows = [dict(r) for r in c.execute(sql, (since,))]
+        prompts = c.execute(
+            "SELECT COUNT(*) FROM messages WHERE type='user' AND prompt_text IS NOT NULL"
+            " AND timestamp >= ?", (since,)).fetchone()[0]
+        first = c.execute(
+            "SELECT MIN(timestamp) FROM messages WHERE timestamp >= ?", (since,)).fetchone()[0]
+    return [{"since": since, "hours": hours, "prompts": prompts, "first_activity": first}, rows]
+
+
+def metric_detail(db_path, metric: str, since=None, until=None) -> dict:
+    """One stat tile, opened: the same number split by project, day and model.
+
+    `sessions` and `prompts` get no model split on purpose — a typed prompt has
+    no model attached, and attributing one would mean guessing which model
+    happened to answer it.
+    """
+    m = METRICS[metric]
+    rng, args = _range_clause(since, until)
+    where = f"WHERE 1=1 {_ROW_FILTER[m['rows']]} {rng}"
+
+    def grouped(select, group, extra=""):
+        sql = f"SELECT {select}, {m['expr']} AS value FROM messages {where} {extra} GROUP BY {group}"
+        return [dict(r) for r in c.execute(sql, args)]
+
+    with connect(db_path) as c:
+        projects = [r for r in grouped("project_slug", "project_slug") if r["value"]]
+        projects.sort(key=lambda r: r["value"], reverse=True)
+        _resolve_names(c, projects)
+
+        days = [r for r in grouped("substr(timestamp,1,10) AS day", "day",
+                                   extra="AND timestamp IS NOT NULL") if r["value"]]
+        days.sort(key=lambda r: r["day"])
+
+        models = []
+        if m["rows"] == "assistant":
+            models = [r for r in grouped("COALESCE(model,'unknown') AS model", "model") if r["value"]]
+            models.sort(key=lambda r: r["value"], reverse=True)
+
+        sessions = [dict(r) for r in c.execute(
+            f"""SELECT session_id, project_slug, MIN(timestamp) AS started,
+                       {m['expr']} AS value
+                  FROM messages {where}
+                 GROUP BY session_id ORDER BY value DESC LIMIT 12""", args)]
+        sessions = [s for s in sessions if s["value"]]
+        _resolve_names(c, sessions)
+
+    return {"metric": metric, "label": m["label"], "projects": projects,
+            "days": days, "models": models, "sessions": sessions,
+            "total": sum(d["value"] for d in days)}
+
+
+def prompt_costs(db_path, since=None, until=None) -> list:
+    """Every typed prompt, with the tokens of all the work it set off.
+
+    Attribution is by **turn window**: a prompt owns every assistant turn that
+    follows it in its session until the next typed prompt. That is what someone
+    means by "what did this prompt cost" — a prompt that triggers a twenty-tool
+    agent run costs all twenty turns, not just the first reply.
+
+    It deliberately does not follow `parent_uuid`. That chain cannot do the job:
+    in a real database 20,598 of 34,586 assistant rows point at a uuid that
+    isn't stored at all (streaming snapshots get evicted by the dedup, and not
+    every attachment or tool result is kept), and of the ones that do resolve
+    almost all land on a tool-result row rather than a typed prompt. The old
+    join matched 257 of 34,586 turns — a 0.7% sample that looked like a ranking
+    and wasn't one.
+
+    Returns one row per (prompt, model), since a single window can span models
+    and cost can only be computed per model. The caller prices and folds.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      WITH ordered AS (
+        SELECT session_id, project_slug, uuid, type, timestamp, prompt_text, model,
+               COALESCE(input_tokens,0)            AS i,
+               COALESCE(output_tokens,0)           AS o,
+               COALESCE(cache_read_tokens,0)       AS cr,
+               COALESCE(cache_create_5m_tokens,0)  AS c5,
+               COALESCE(cache_create_1h_tokens,0)  AS c1,
+               SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END)
+                 OVER (PARTITION BY session_id ORDER BY timestamp, uuid
+                       ROWS UNBOUNDED PRECEDING) AS grp
+          FROM messages
+         WHERE 1=1 {rng}
+      ),
+      heads AS (
+        SELECT session_id, project_slug, grp, uuid, timestamp, prompt_text
+          FROM ordered WHERE type='user' AND prompt_text IS NOT NULL
+      ),
+      work AS (
+        SELECT session_id, grp, COALESCE(model,'unknown') AS model,
+               COUNT(*) AS turns,
+               SUM(i) AS input_tokens, SUM(o) AS output_tokens,
+               SUM(cr) AS cache_read_tokens,
+               SUM(c5) AS cache_create_5m_tokens, SUM(c1) AS cache_create_1h_tokens
+          FROM ordered WHERE type='assistant' GROUP BY session_id, grp, model
+      )
+      -- LEFT, not INNER: a prompt that set nothing off still happened, and
+      -- dropping it silently makes the list shorter than the prompt count on
+      -- every other screen. It comes back with zeroes and costs nothing.
+      SELECT h.uuid AS prompt_uuid, h.session_id, h.project_slug,
+             h.timestamp, h.prompt_text,
+             COALESCE(w.model, 'none')       AS model,
+             COALESCE(w.turns, 0)            AS turns,
+             COALESCE(w.input_tokens, 0)     AS input_tokens,
+             COALESCE(w.output_tokens, 0)    AS output_tokens,
+             COALESCE(w.cache_read_tokens, 0) AS cache_read_tokens,
+             COALESCE(w.cache_create_5m_tokens, 0) AS cache_create_5m_tokens,
+             COALESCE(w.cache_create_1h_tokens, 0) AS cache_create_1h_tokens
+        FROM heads h
+        LEFT JOIN work w ON w.session_id = h.session_id AND w.grp = h.grp
+    """
+    with connect(db_path) as c:
+        rows = [dict(r) for r in c.execute(sql, args)]
+        _resolve_names(c, rows)
+    return rows
+
+
+def daily_model_breakdown(db_path, since=None, until=None) -> list:
+    """One row per (day, model). Caller prices each and sums per day."""
+    return _grouped_model_breakdown(
+        db_path, "substr(timestamp, 1, 10)", "day", since, until,
+        "AND timestamp IS NOT NULL",
+    )
+
+
+def project_model_breakdown(db_path, since=None, until=None) -> list:
+    """One row per (project_slug, model). Caller prices each and sums."""
+    return _grouped_model_breakdown(
+        db_path, "project_slug", "project_slug", since, until, "",
+    )

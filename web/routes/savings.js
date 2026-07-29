@@ -1,4 +1,5 @@
 import { api, fmt, tip, $, $$ } from '/web/app.js';
+import { openOverlay, closeOverlay, overlayShell, seg, sortable } from '/web/overlay.js';
 
 // Savings — written to be read by someone who has not thought about token
 // pricing before. Every number gets a plain sentence next to it, and an ⓘ that
@@ -8,8 +9,8 @@ import { api, fmt, tip, $, $$ } from '/web/app.js';
 
 const h = fmt.htmlSafe;
 
-const tile = (label, value, sub, cls, tipText) => `
-  <div class="card tile">
+const tile = (label, value, sub, cls, tipText, of) => `
+  <div class="card tile${of ? ' clickable' : ''}"${of ? ` data-of="${of}" role="button" tabindex="0"` : ''}>
     <div class="tile-label">${h(label)} ${tip(tipText)}</div>
     <div class="tile-value ${cls || ''}">${value}</div>
     <div class="tile-sub">${sub}</div>
@@ -91,14 +92,21 @@ export default async function (root) {
   const s = await api('/api/savings');
 
   if (!s.history.first_day) {
-    root.innerHTML = `<div class="card"><h2>Savings</h2>
-      <p class="muted">Nothing scanned yet. Run <code>python3 cli.py scan</code> first.</p></div>`;
+    root.innerHTML = `
+      <div class="pagehead"><h2>Savings</h2></div>
+      <div class="card"><div class="empty">
+        Nothing scanned yet. Run <code>python3 cli.py scan</code> first.
+      </div></div>`;
     return;
   }
 
   root.innerHTML = `
-    <div class="card">
+    <div class="pagehead">
       <h2>Savings</h2>
+      <span class="sub">last ${s.history.weeks} weeks</span>
+    </div>
+
+    <div class="card">
       <p class="lede">
         Over the last <b>${s.history.weeks} weeks</b> your tokens were worth
         <b>${fmt.usd(s.spend.total_usd)}</b>.
@@ -108,14 +116,14 @@ export default async function (root) {
       </p>
     </div>
 
-    <div class="grid-3" style="margin-top:16px">
-      ${tile('What you used', fmt.usd(s.spend.total_usd),
+    <div class="grid-3" style="margin-top:14px">
+      ${tile('Work delivered', fmt.usd(s.spend.total_usd),
              `Claude ${fmt.usd(s.spend.claude_usd)} + Codex ${fmt.usd(s.spend.codex_usd)}`,
-             '', TIPS.spent)}
-      ${tile('Saved by caching', fmt.usd(s.headline.exact_usd),
-             'Automatic. Exact figure.', 'good', TIPS.caching)}
-      ${tile('Saved by your changes', fmt.usd(s.headline.attributed_usd),
-             'Your doing. Best estimate.', 'good', TIPS.yourChanges)}
+             '', TIPS.spent, 'spend')}
+      ${tile('Caching paid for itself', fmt.usd(s.headline.exact_usd),
+             'Automatic. Exact figure.', 'good', TIPS.caching, 'caching')}
+      ${tile('Your own improvements', fmt.usd(s.headline.attributed_usd),
+             'Measured against your worst week.', 'good', TIPS.yourChanges)}
     </div>
 
     ${cacheCard(s)}
@@ -128,12 +136,210 @@ export default async function (root) {
   `;
 
   wireLabels(root);
+  wireTiles(root);
 }
+
+// --- the breakdown overlay ---------------------------------------------------
+//
+// Click a tile, get the breakdown as a layer over the page. It lived inline
+// first, part-way down a page that already carries seven cards, so the answer
+// to "what made this number" arrived buried among six other things. A layer
+// gets the screen to itself and leaves when you're done with it.
+
+const VIEWS = [
+  {
+    key: 'spend',
+    tab: 'Work delivered',
+    title: 'Work delivered',
+    col: 'cost_usd',
+    colLabel: 'cost',
+    plain: true,
+    lead: 'Where the work happened. Costed at pay-as-you-go API rates.',
+  },
+  {
+    key: 'caching',
+    tab: 'Caching',
+    title: 'Caching paid for itself',
+    col: 'cache_saved_usd',
+    colLabel: 'saved',
+    lead: 'Where the caching saving came from — long sessions re-reading a stable prompt. '
+        + 'Net of the premium paid to write those cache entries, so these add up to the headline.',
+  },
+];
+
+const SORTS = [
+  { key: 'amount', label: 'Biggest' },
+  { key: 'recent', label: 'Newest' },
+  { key: 'oldest', label: 'Oldest' },
+  { key: 'project', label: 'Project' },
+];
+
+const TOP_N = 12;
+const cache = {};
+let ui = { of: 'spend', list: 'sessions', sort: 'amount', showAll: false };
+
+function wireTiles(root) {
+  $$('[data-of]', root).forEach(el => {
+    const open = () => {
+      ui = { of: el.dataset.of, list: 'sessions', sort: 'amount', showAll: false };
+      openPanel();
+    };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  });
+}
+
+function openPanel() {
+  openOverlay();
+  draw();
+}
+
+function sortRows(rows, view) {
+  const when = r => String(r.started || r.timestamp || '');
+  const name = r => (r.project_name || r.project_slug || '').toLowerCase();
+  const copy = rows.slice();
+  if (ui.sort === 'recent') copy.sort((a, b) => when(b).localeCompare(when(a)));
+  else if (ui.sort === 'oldest') copy.sort((a, b) => when(a).localeCompare(when(b)));
+  else if (ui.sort === 'project') copy.sort((a, b) => name(a).localeCompare(name(b)) || (b[view.col] || 0) - (a[view.col] || 0));
+  else copy.sort((a, b) => (b[view.col] || 0) - (a[view.col] || 0));
+  return copy;
+}
+
+async function draw() {
+  const view = VIEWS.find(v => v.key === ui.of) || VIEWS[0];
+
+  const shell = (amount, body) => {
+    const node = overlayShell({
+      title: view.title,
+      amount,
+      amountClass: view.plain ? 'plain' : '',
+      controls: seg(VIEWS.map(v => ({ key: v.key, label: v.tab })), view.key, 'view'),
+      body,
+    });
+    $$('[data-view]', node).forEach(b => b.addEventListener('click', () => {
+      ui = { of: b.dataset.view, list: ui.list, sort: ui.sort, showAll: false };
+      draw();
+    }));
+    return node;
+  };
+
+  if (!cache[view.key]) {
+    shell('', '<div class="empty">Loading…</div>');
+    try {
+      cache[view.key] = await api('/api/savings/breakdown?of=' + encodeURIComponent(view.key));
+    } catch {
+      return shell('', '<div class="empty">Couldn\'t load that breakdown.</div>');
+    }
+    if (ui.of !== view.key) return;   // switched while loading
+  }
+
+  const d = cache[view.key];
+  const total = ui.list === 'sessions' ? d.session_total : d.prompt_total;
+  const rows = sortRows(ui.list === 'sessions' ? d.sessions : d.prompts, view);
+  const top = rows.slice(0, TOP_N);
+  const topSum = top.reduce((a, r) => a + (r[view.col] || 0), 0);
+  const share = total ? Math.round(100 * topSum / total) : 0;
+
+  shell(fmt.usd(total), `
+    <p class="card-note" style="margin:0 0 14px">${h(view.lead)}</p>
+
+    <div class="list-meta" style="margin-bottom:12px">
+      ${seg([{ key: 'sessions', label: 'Sessions' }, { key: 'prompts', label: 'Prompts' }], ui.list, 'list')}
+      ${seg(SORTS, ui.sort, 'sort')}
+      <span class="spacer"></span>
+      <span>${fmt.int(rows.length)} ${ui.list}</span>
+    </div>
+
+    <p class="lede" style="font-size:13.5px;margin:0 0 12px">
+      ${ui.sort === 'amount'
+        ? `The top ${top.length} account for <b>${fmt.usd(topSum)}</b> of ${fmt.usd(total)} — <b>${share}%</b>.`
+        : `Showing ${top.length} of ${fmt.int(rows.length)}, ${
+            ui.sort === 'project' ? 'grouped by project' : ui.sort === 'recent' ? 'newest first' : 'oldest first'
+          }.`}
+    </p>
+
+    ${ui.showAll ? '' : `<div>${bars(top, view)}</div>`}
+
+    <div class="list-meta" style="margin-top:12px">
+      <span class="spacer"></span>
+      <button class="ghost" data-toggle-all>${
+        ui.showAll ? '← back to the ranked list' : `show all ${fmt.int(rows.length)} as a sortable table`}</button>
+    </div>
+    ${ui.showAll ? '<div class="table-scroll" id="sv-table"></div>' : ''}
+  `);
+
+  $$('[data-list]', document).forEach(b => b.addEventListener('click', () => {
+    ui.list = b.dataset.list; ui.showAll = false; draw();
+  }));
+  $$('[data-sort]', document).forEach(b => b.addEventListener('click', () => {
+    ui.sort = b.dataset.sort; draw();
+  }));
+  $('[data-toggle-all]', document).addEventListener('click', () => {
+    ui.showAll = !ui.showAll; draw();
+  });
+
+  if (ui.showAll) {
+    sortable($('#sv-table', document),
+             ui.list === 'sessions' ? sessionCols(view) : promptCols(view),
+             rows, view.col);
+  }
+}
+
+/** Ranked bars, same pattern as "Where it went" on the Overview. A proportional
+ *  bar answers "how much of the total is this" without arithmetic; a column of
+ *  dollar figures does not. */
+function bars(rows, view) {
+  if (!rows.length) return '<div class="empty">nothing here yet</div>';
+  const max = Math.max(...rows.map(r => r[view.col] || 0), 0.0001);
+  return rows.map(r => {
+    const value = r[view.col] || 0;
+    const isPrompt = r.prompt_text !== undefined;
+    const label = isPrompt ? fmt.short(r.prompt_text, 76) : (r.project_name || r.project_slug);
+    return `<a class="bar-row" href="#/sessions/${encodeURIComponent(r.session_id)}"
+               title="${h(r.prompt_text || r.project_name || r.project_slug)}">
+      <span class="bar-name blur-sensitive">${h(label)}
+        <span class="muted mono" style="font-size:11px">${h(fmt.ts(r.started || r.timestamp))}</span></span>
+      <span class="bar-val">${fmt.usd(value)}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${Math.max(2, 100 * value / max)}%"></span></span>
+    </a>`;
+  }).join('');
+}
+
+const projectCol = () => ({
+  key: 'project', label: 'project',
+  value: r => (r.project_name || r.project_slug || '').toLowerCase(),
+  cls: 'blur-sensitive',
+  render: r => `<a href="#/sessions/${encodeURIComponent(r.session_id)}">${h(r.project_name || r.project_slug)}</a>`,
+});
+
+const sessionCols = view => [
+  { key: 'started', label: 'started', cls: 'mono', value: r => r.started || '', render: r => fmt.ts(r.started) },
+  projectCol(),
+  { key: 'tokens', label: 'billable', num: true, value: r => r.billable_tokens || 0, render: r => fmt.compact(r.billable_tokens) },
+  { key: 'cost_usd', label: 'cost', num: true, value: r => r.cost_usd || 0, render: r => fmt.usd(r.cost_usd) },
+  { key: 'cache_saved_usd', label: 'saved', num: true, value: r => r.cache_saved_usd || 0, render: r => fmt.usd(r.cache_saved_usd) },
+];
+
+const promptCols = view => [
+  { key: 'prompt', label: 'prompt', cls: 'blur-sensitive',
+    value: r => (r.prompt_text || '').toLowerCase(),
+    render: r => `<span title="${h(r.prompt_text)}">${h(fmt.short(r.prompt_text, 70))}</span>` },
+  projectCol(),
+  { key: 'model', label: 'model', value: r => (r.models || []).join(),
+    render: r => (r.models || []).slice(0, 2).map(m =>
+      `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ') },
+  { key: 'turns', label: 'turns', num: true, value: r => r.turns || 0, render: r => fmt.int(r.turns) },
+  { key: 'when', label: 'when', cls: 'mono', value: r => r.timestamp || '', render: r => fmt.ts(r.timestamp) },
+  { key: 'cost_usd', label: 'cost', num: true, value: r => r.cost_usd || 0, render: r => fmt.usd(r.cost_usd) },
+  { key: 'cache_saved_usd', label: 'saved', num: true, value: r => r.cache_saved_usd || 0, render: r => fmt.usd(r.cache_saved_usd) },
+];
 
 function cacheCard(s) {
   const c = s.cache;
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>Where the caching saving comes from ${tip(TIPS.caching)}</h3>
       <p class="muted" style="margin:0 0 12px">
         ${fmt.compact(c.read_tokens)} tokens were re-read from cache instead of being paid for in full.
@@ -172,12 +378,12 @@ function cacheCard(s) {
 function changeCard(s) {
   const rows = s.change_points;
   if (!rows.length) {
-    return `<div class="card" style="margin-top:16px"><h3>Things that changed</h3>
+    return `<div class="card" style="margin-top:14px"><h3>Things that changed</h3>
       <p class="muted">Nothing has dropped sharply enough to flag yet. This needs a couple of weeks either side of a change to spot one.</p></div>`;
   }
   const named = rows.filter(r => r.label).length;
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>Things that changed — what did you do? ${tip(TIPS.changePoints)}</h3>
       <p class="muted" style="margin:0 0 12px">
         On each of these days, something dropped and stayed down. We can see the drop but not the cause —
@@ -193,7 +399,7 @@ function changeCard(s) {
           ${rows.map(r => `
             <tr>
               <td class="nowrap">${h(r.date)}</td>
-              <td class="sensitive">${h(fmt.short(fmt.tildePath(r.metric), 58))}
+              <td class="blur-sensitive">${h(fmt.short(fmt.tildePath(r.metric), 58))}
                 <div class="muted" style="font-size:11px">
                   ${fmt.int(Math.round(r.before_per_day))} → ${fmt.int(Math.round(r.after_per_day))} a day
                 </div>
@@ -224,7 +430,7 @@ function wasteCard(s) {
   const items = w.items.filter(i => i.peak_per_week > 0);
   if (!items.length) return '';
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>Habits that cost tokens ${tip(TIPS.waste)}</h3>
       <p class="muted" style="margin:0 0 12px">
         Where you are now, against the worst week you've ever had.
@@ -258,7 +464,7 @@ function efficiencyCard(s) {
   const peak = Math.max(...pts.map(p => p.tokens_per_turn), 1);
   const better = e.change_pct < 0;
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>What one prompt costs you ${tip(TIPS.perTurn)}</h3>
       <p class="lede" style="font-size:14px">
         One prompt went from <b>${fmt.int(e.first_tokens_per_turn)}</b> tokens to
@@ -282,7 +488,7 @@ function projectionCard(s) {
   const p = s.projection;
   if (!p.last_7d_usd) return '';
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>If nothing changes <span class="badge warn">guess</span> ${tip(TIPS.forecast)}</h3>
       <p class="lede" style="font-size:14px">
         You used <b>${fmt.usd(p.last_7d_usd)}</b> last week. At that pace it's
@@ -302,7 +508,7 @@ function codexCard(s) {
     ? Math.round(100 * c.cache_read_tokens / (c.input_tokens + c.cache_read_tokens))
     : 0;
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3>Codex ${tip(TIPS.codex)}</h3>
       <p class="lede" style="font-size:14px">
         <b>${fmt.int(c.sessions)}</b> Codex runs used <b>${fmt.usd(c.cost_usd)}</b> —
@@ -322,7 +528,7 @@ function unpricedCard(s) {
   const u = s.spend.unpriced_models;
   if (!u.length) return '';
   return `
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:14px">
       <h3><span class="badge bad">missing</span> Models with no price ${tip(TIPS.gap)}</h3>
       <p class="muted" style="margin:0 0 12px">
         Their tokens are left out of every figure on this page. Add them to <code>pricing.json</code> and restart.

@@ -30,7 +30,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("scanned", r1.stdout)
         r2 = self._run("today")
         self.assertEqual(r2.returncode, 0, r2.stderr)
-        self.assertIn("Token Dashboard", r2.stdout)
+        self.assertIn("Token Meter", r2.stdout)
 
     def test_stats(self):
         self._run("scan", "--projects-dir", self.proj)

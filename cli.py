@@ -1,4 +1,4 @@
-"""Token Dashboard CLI entrypoint."""
+"""Token Meter CLI entrypoint."""
 from __future__ import annotations
 
 import argparse
@@ -46,9 +46,9 @@ def cmd_scan(args):
     db = _db_path(args)
     init_db(db)
     n = scan_dir(_projects(args), db)
-    print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
+    print(f"Token Meter: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
     c = scan_codex(_codex(args), db)
-    print(f"Token Dashboard: scanned {c['sessions']} Codex sessions")
+    print(f"Token Meter: scanned {c['sessions']} Codex sessions")
 
 
 def cmd_today(args):
@@ -56,7 +56,7 @@ def cmd_today(args):
     init_db(db)
     s, e = _today_range()
     t = overview_totals(db, since=s, until=e)
-    print("Token Dashboard — today")
+    print("Token Meter — today")
     print(f"  sessions: {t['sessions']}    turns: {t['turns']}")
     print(f"  input:    {t['input_tokens']:>12,}    output: {t['output_tokens']:>12,}")
     print(f"  cache rd: {t['cache_read_tokens']:>12,}    cache cr: {t['cache_create_5m_tokens']+t['cache_create_1h_tokens']:>12,}")
@@ -66,7 +66,7 @@ def cmd_stats(args):
     db = _db_path(args)
     init_db(db)
     t = overview_totals(db)
-    print("Token Dashboard — all time")
+    print("Token Meter — all time")
     print(f"  sessions: {t['sessions']}    turns: {t['turns']}")
     print(f"  input:    {t['input_tokens']:>12,}    output: {t['output_tokens']:>12,}")
 
@@ -76,7 +76,7 @@ def cmd_tips(args):
     init_db(db)
     tips = all_tips(db)
     if not tips:
-        print("Token Dashboard: no suggestions")
+        print("Token Meter: no suggestions")
         return
     for tip in tips:
         print(f"[{tip['category']}] {tip['title']}")
@@ -102,7 +102,7 @@ def cmd_dashboard(args):
     url = f"http://{host}:{port}/"
     if not args.no_open:
         webbrowser.open(url)
-    print(f"Token Dashboard listening on {url}")
+    print(f"Token Meter listening on {url}")
     run(host, port, db, _projects(args))
 
 
