@@ -477,6 +477,14 @@ def build_savings(
 
     waste_to_date = round(waste["saved_usd_per_week"] * weeks, 2)
 
+    # The comparison that makes the cache figure mean anything. Paying X while
+    # saving 6X reads as nonsense until you say what the alternative was:
+    # without a cache, every cached read is full-price input and every cache
+    # write is plain input too. That difference is exactly the net saving, so
+    # the counterfactual bill is simply what you paid plus what you saved.
+    total_spend = round(spend["usd"] + codex_spend["usd"], 2)
+    without_caching = round(total_spend + cache["net_saved_usd"], 2)
+
     return {
         "generated_at": now.isoformat(),
         "plan": get_plan(db_path),
@@ -488,7 +496,12 @@ def build_savings(
         "spend": {
             "claude_usd": spend["usd"],
             "codex_usd": codex_spend["usd"],
-            "total_usd": round(spend["usd"] + codex_spend["usd"], 2),
+            "total_usd": total_spend,
+            "without_caching_usd": without_caching,
+            "discount_pct": (
+                round(100.0 * cache["net_saved_usd"] / without_caching, 1)
+                if without_caching else None
+            ),
             "unpriced_models": spend["unpriced"] + codex_spend["unpriced"],
         },
         "headline": {

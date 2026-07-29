@@ -1,4 +1,4 @@
-import { api, fmt, state } from '/web/app.js';
+import { api, fmt, tip, state } from '/web/app.js';
 import { barChart, donutChart, groupedBarChart, stackedBarChart } from '/web/charts.js';
 
 const RANGES = [
@@ -30,26 +30,27 @@ function withSince(url, since) {
   return url + (url.includes('?') ? '&' : '?') + 'since=' + encodeURIComponent(since);
 }
 
-/** Spell out how the cost figure was reached, including anything it excludes. */
+/** Say what the cost figure actually is, in plain words, including what it leaves out. */
 function costWhy(totals) {
   const parts = [
-    'Each model\'s tokens x that model\'s rate from pricing.json, summed — input, output, '
-    + 'cache reads and cache writes are priced separately, then added up.',
+    'What these tokens would cost at pay-as-you-go API rates.',
+    'Each model has its own price, and input, output and cache tokens are charged '
+    + 'differently — this adds all of it up. Cache reads are the cheap ones, at a '
+    + 'tenth of normal input.',
   ];
   if (totals.cost_estimated) {
-    parts.push('At least one model had no exact entry and was priced at its tier\'s fallback rate, '
-      + 'so this is an approximation.');
+    parts.push('One of your models has no exact price listed, so it was costed at its '
+      + 'family\'s rate. Close, but approximate.');
   }
   const gaps = totals.unpriced_models || [];
   if (gaps.length) {
-    parts.push('EXCLUDED — no price for: '
+    parts.push('NOT counted here — no price on file for '
       + gaps.map(g => `${g.model} (${fmt.int(g.billable_tokens)} tokens)`).join(', ')
-      + '. Add them to pricing.json to bring them into this figure.');
+      + '. Add them to pricing.json and restart to bring them in.');
   }
-  parts.push('It is what these tokens would cost on the API — not necessarily what you were '
-    + 'charged, if you are on a subscription.');
-  const txt = parts.join(' ');
-  return `<span class="why" tabindex="0" title="${fmt.htmlSafe(txt)}" aria-label="How this was computed: ${fmt.htmlSafe(txt)}">ⓘ</span>`;
+  parts.push('If you\'re on a Max or Pro subscription you didn\'t pay this — it\'s what '
+    + 'the same work would have cost per-token.');
+  return tip(parts.join('\n\n'));
 }
 
 export default async function (root) {

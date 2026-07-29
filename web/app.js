@@ -36,6 +36,60 @@ export async function api(path, opts) {
 
 export const state = { plan: 'api', planSet: false, pricing: null };
 
+/** An ⓘ button that explains a number. `text` may contain blank lines. */
+export const tip = text => text
+  ? `<button type="button" class="why" data-tip="${fmt.htmlSafe(text)}" aria-label="What this means">ⓘ</button>`
+  : '';
+
+/** One floating tooltip for the whole app, delegated off document so it keeps
+ *  working after any tab re-renders. Shows on hover, keyboard focus, or tap;
+ *  click pins it open so long explanations can be read at leisure. */
+function installTooltips() {
+  const el = document.createElement('div');
+  el.className = 'tipbox';
+  el.setAttribute('role', 'tooltip');
+  document.body.appendChild(el);
+  let pinned = null;
+
+  const show = target => {
+    el.textContent = target.dataset.tip;
+    el.classList.add('on');
+    const r = target.getBoundingClientRect();
+    // Keep it on screen: left-align to the anchor, pull back from the edge,
+    // and flip above when there isn't room below.
+    let left = r.left;
+    if (left + el.offsetWidth > window.innerWidth - 12) left = window.innerWidth - el.offsetWidth - 12;
+    el.style.left = Math.max(12, left) + 'px';
+    const below = r.bottom + 8;
+    el.style.top = (below + el.offsetHeight > window.innerHeight - 12
+      ? Math.max(12, r.top - el.offsetHeight - 8)
+      : below) + 'px';
+  };
+  const hide = () => { el.classList.remove('on'); pinned = null; };
+
+  document.addEventListener('mouseover', e => {
+    const t = e.target.closest?.('[data-tip]');
+    if (t && !pinned) show(t);
+  });
+  document.addEventListener('mouseout', e => {
+    if (!pinned && e.target.closest?.('[data-tip]')) hide();
+  });
+  document.addEventListener('focusin', e => {
+    const t = e.target.closest?.('[data-tip]');
+    if (t) show(t);
+  });
+  document.addEventListener('focusout', () => { if (!pinned) hide(); });
+  document.addEventListener('click', e => {
+    const t = e.target.closest?.('[data-tip]');
+    if (!t) return hide();
+    if (pinned === t) return hide();
+    pinned = t;
+    show(t);
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+  window.addEventListener('scroll', () => { if (!pinned) hide(); }, { passive: true });
+}
+
 const ROUTES = {
   '/overview': () => import('/web/routes/overview.js'),
   '/prompts':  () => import('/web/routes/prompts.js'),
@@ -115,6 +169,7 @@ async function firstRun() {
 
 async function boot() {
   buildTopbar();
+  installTooltips();
   const planResp = await api('/api/plan');
   state.plan = planResp.plan;
   state.planSet = !!planResp.plan_set;
