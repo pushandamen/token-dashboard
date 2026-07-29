@@ -214,23 +214,36 @@ def waste_vs_peak(db_path, pricing: dict, now: datetime) -> dict:
     """Current 7-day rate of each waste pattern against its worst 7-day window."""
     rate = _blended_input_rate(db_path, pricing)
     basis = (
-        f"Each pattern's most recent 7 days against its worst 7 days, priced at "
-        f"${rate:.2f}/MTok — the input rate you actually paid, weighted by how much "
-        f"each model was used. Attributed, not exact: both ends are measured, but "
-        f"it assumes you would otherwise still be running at the worst rate."
+        f"Your most recent complete 7 days against the worst 7 days you've had, "
+        f"priced at ${rate:.2f}/MTok — the input rate you actually paid, weighted "
+        f"by how much each model was used.\n\n"
+        f"Today is excluded from the comparison: it is still in progress, and a "
+        f"half-finished day makes every habit look better than it is.\n\n"
+        f"Attributed, not exact. Both ends are measured, but it assumes you would "
+        f"otherwise still be running at your worst rate."
     )
     with connect(db_path) as c:
         span = c.execute(
             "SELECT MIN(substr(timestamp,1,10)) a, MAX(substr(timestamp,1,10)) b FROM messages"
         ).fetchone()
     if not span or not span["a"]:
-        return {"items": [], "saved_usd_per_week": 0.0,
-                "blended_input_rate": rate, "basis": basis}
+        return {"items": [], "saved_usd_per_week": 0.0, "saved_usd_to_date": 0.0,
+                "window_ends": None, "blended_input_rate": rate, "basis": basis}
+
+    # Today is still in progress, so its counts are partial. Leaving it in the
+    # "current week" window makes every habit look better than it is — a made-up
+    # improvement that grows the earlier in the day you look.
+    today = _day(now)
+    last_complete = span["b"]
+    if last_complete >= today:
+        prev = datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)
+        last_complete = _day(prev)
 
     items = []
     saved_week = 0.0
+    saved_todate = 0.0
     for key, meta in _daily_waste_series(db_path).items():
-        days = _dense_days(meta["series"], span["a"], span["b"])
+        days = _dense_days(meta["series"], span["a"], last_complete)
         if len(days) < WINDOW_DAYS * 2:
             continue
         windows = [
@@ -243,6 +256,16 @@ def waste_vs_peak(db_path, pricing: dict, now: datetime) -> dict:
         usd = round(delta * rate / 1e6, 2) if meta["unit"] == "tokens" else None
         if usd:
             saved_week += usd
+
+        # Cumulative avoided, summed day by day against the peak's daily rate.
+        # The old figure took *this* week's gap and multiplied it by every week
+        # of history — which claims credit for weeks you were still at your
+        # worst. Summing the actual per-day gaps only counts days you beat it.
+        if meta["unit"] == "tokens":
+            peak_daily = peak / WINDOW_DAYS
+            gap = sum(max(0.0, peak_daily - v) for _, v in days)
+            saved_todate += gap * rate / 1e6
+
         items.append({
             "key": key,
             "label": meta["label"],
@@ -259,6 +282,8 @@ def waste_vs_peak(db_path, pricing: dict, now: datetime) -> dict:
     return {
         "items": items,
         "saved_usd_per_week": round(saved_week, 2),
+        "saved_usd_to_date": round(saved_todate, 2),
+        "window_ends": last_complete,
         "blended_input_rate": round(rate, 3),
         "basis": basis,
     }
@@ -331,7 +356,7 @@ def change_points(db_path, pricing: dict) -> list:
               SELECT substr(timestamp,1,10) AS day,
                      SUM(input_tokens + output_tokens
                          + cache_create_5m_tokens + cache_create_1h_tokens) AS tok,
-                     SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns
+                     SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns
                 FROM messages WHERE timestamp IS NOT NULL GROUP BY day
             """)
         ]
@@ -398,7 +423,7 @@ def efficiency_trend(db_path) -> dict:
                  MIN(substr(timestamp,1,10)) AS starting,
                  SUM(input_tokens + output_tokens
                      + cache_create_5m_tokens + cache_create_1h_tokens) AS tok,
-                 SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
+                 SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
                  COUNT(DISTINCT session_id) AS sessions
             FROM messages WHERE timestamp IS NOT NULL
            GROUP BY week ORDER BY week ASC
@@ -463,8 +488,19 @@ def build_savings(
     spend = total_cost(model_breakdown(db_path), pricing)
     codex_spend = total_cost(codex_breakdown(db_path), pricing)
 
-    # Weeks of history, so the per-week waste figure can be turned into a
-    # to-date figure without pretending the whole history ran at peak.
+    # Codex caches too, and its spend is in the total below — so its cache
+    # discount has to be in the counterfactual as well, or the "without caching"
+    # bill silently understates by whatever Codex saved.
+    codex_cache_saved = 0.0
+    for r in codex_breakdown(db_path):
+        rates = pricing["models"].get(r["model"])
+        if rates is None:
+            tier = _tier_of(r["model"], pricing)
+            rates = pricing["tier_fallback"].get(tier) if tier else None
+        if rates:
+            codex_cache_saved += r["cache_read_tokens"] * (rates["input"] - rates["cache_read"]) / 1e6
+    all_cache_saved = round(cache["net_saved_usd"] + codex_cache_saved, 2)
+
     with connect(db_path) as c:
         span = c.execute(
             "SELECT MIN(substr(timestamp,1,10)) a, MAX(substr(timestamp,1,10)) b FROM messages"
@@ -475,7 +511,7 @@ def build_savings(
                 - datetime.strptime(span["a"], "%Y-%m-%d")).days + 1
         weeks = days / 7.0
 
-    waste_to_date = round(waste["saved_usd_per_week"] * weeks, 2)
+    waste_to_date = waste["saved_usd_to_date"]
 
     # The comparison that makes the cache figure mean anything. Paying X while
     # saving 6X reads as nonsense until you say what the alternative was:
@@ -483,7 +519,7 @@ def build_savings(
     # write is plain input too. That difference is exactly the net saving, so
     # the counterfactual bill is simply what you paid plus what you saved.
     total_spend = round(spend["usd"] + codex_spend["usd"], 2)
-    without_caching = round(total_spend + cache["net_saved_usd"], 2)
+    without_caching = round(total_spend + all_cache_saved, 2)
 
     return {
         "generated_at": now.isoformat(),
@@ -499,19 +535,20 @@ def build_savings(
             "total_usd": total_spend,
             "without_caching_usd": without_caching,
             "discount_pct": (
-                round(100.0 * cache["net_saved_usd"] / without_caching, 1)
+                round(100.0 * all_cache_saved / without_caching, 1)
                 if without_caching else None
             ),
             "unpriced_models": spend["unpriced"] + codex_spend["unpriced"],
         },
         "headline": {
-            "exact_usd": cache["net_saved_usd"],
+            "exact_usd": all_cache_saved,
             "attributed_usd": waste_to_date,
-            "total_usd": round(cache["net_saved_usd"] + waste_to_date, 2),
+            "total_usd": round(all_cache_saved + waste_to_date, 2),
             "basis": (
-                f"Net cache savings (exact) plus waste avoided against your own worst "
-                f"week, carried across {round(weeks, 1)} weeks of history (attributed). "
-                f"The forecast below is deliberately excluded — it has not happened yet."
+                "Net cache savings across Claude and Codex (exact arithmetic on measured "
+                "tokens), plus waste avoided — summed day by day against your worst week's "
+                "daily rate, so only days you actually beat it count. The forecast lower "
+                "down is deliberately left out; it hasn't happened."
             ),
         },
         "cache": cache,

@@ -36,10 +36,21 @@ def _msg(c, i, day, model="claude-opus-5", **tok):
 
 
 def _turn(c, i, day):
+    """A prompt the human typed. `prompt_text` is what distinguishes one of
+    these from a tool result, which Claude Code also stores as type='user'."""
+    c.execute(
+        "INSERT INTO messages (uuid, session_id, project_slug, type, timestamp, prompt_text)"
+        " VALUES (?,?,?,?,?,?)",
+        (f"t{i}", f"s{day}", "proj", "user", f"{day}T12:00:00Z", "do the thing"),
+    )
+
+
+def _tool_result(c, i, day):
+    """A tool result. Same type='user', but no prompt_text — must NOT be a turn."""
     c.execute(
         "INSERT INTO messages (uuid, session_id, project_slug, type, timestamp)"
         " VALUES (?,?,?,?,?)",
-        (f"t{i}", f"s{day}", "proj", "user", f"{day}T12:00:00Z"),
+        (f"r{i}", f"s{day}", "proj", "user", f"{day}T12:00:00Z"),
     )
 
 
@@ -159,6 +170,39 @@ class ChangePointTests(unittest.TestCase):
         self.assertIsNone(again["label"])
 
 
+class TurnCountingTests(unittest.TestCase):
+    """A turn is a prompt the human typed — not every `type: "user"` row.
+
+    Claude Code writes tool results as user messages too. Counting those inflated
+    the turn total roughly 8x on a real history (40,274 user rows, 5,094 prompts)
+    and divided tokens-per-turn by the same factor.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "t.db")
+        init_db(self.db)
+        with connect(self.db) as c:
+            _turn(c, 1, "2026-06-01")           # one real prompt
+            for j in range(9):                   # nine tool results behind it
+                _tool_result(c, j, "2026-06-01")
+            _msg(c, 1, "2026-06-01", input_tokens=9_000)
+            c.commit()
+
+    def test_tool_results_are_not_turns(self):
+        from token_dashboard.db import overview_totals
+        self.assertEqual(overview_totals(self.db)["turns"], 1)
+
+    def test_tokens_per_turn_is_per_prompt(self):
+        e = efficiency_trend(self.db)
+        self.assertEqual(e["latest_tokens_per_turn"], 9_000)
+
+    def test_sessions_and_projects_agree_on_the_definition(self):
+        from token_dashboard.db import project_summary, recent_sessions
+        self.assertEqual(recent_sessions(self.db)[0]["turns"], 1)
+        self.assertEqual(project_summary(self.db)[0]["turns"], 1)
+
+
 class EfficiencyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -189,6 +233,32 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(b["change_points"], [])
         self.assertIsNone(b["history"]["first_day"])
         self.assertTrue(b["projection"]["is_forecast"])
+
+    def test_todate_only_counts_days_that_beat_the_peak(self):
+        # Flat history: every day sits at the peak rate, so nothing was avoided.
+        # The old figure took this week's gap and multiplied it by every week of
+        # history, which invented savings out of a steady state.
+        with connect(self.db) as c:
+            for i in range(28):
+                day = (DAY0 + timedelta(days=i)).strftime("%Y-%m-%d")
+                _msg(c, i, day, cache_create_1h_tokens=1_000_000)
+                _turn(c, i, day)
+            c.commit()
+        b = build_savings(self.db, now=DAY0 + timedelta(days=28))
+        self.assertEqual(b["waste"]["saved_usd_to_date"], 0.0)
+        self.assertEqual(b["headline"]["attributed_usd"], 0.0)
+
+    def test_partial_today_is_kept_out_of_the_current_window(self):
+        with connect(self.db) as c:
+            for i in range(21):
+                day = (DAY0 + timedelta(days=i)).strftime("%Y-%m-%d")
+                _msg(c, i, day, cache_create_1h_tokens=1_000_000)
+                _turn(c, i, day)
+            c.commit()
+        # "now" is the last day in the data, so that day is still in progress.
+        b = build_savings(self.db, now=DAY0 + timedelta(days=20))
+        self.assertEqual(b["waste"]["window_ends"],
+                         (DAY0 + timedelta(days=19)).strftime("%Y-%m-%d"))
 
     def test_forecast_is_excluded_from_the_headline(self):
         with connect(self.db) as c:

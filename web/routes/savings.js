@@ -30,11 +30,13 @@ This is the difference between what you paid and what you'd have paid with no ca
 
 To keep it working for you: stay in longer sessions, and avoid editing CLAUDE.md or your tool list mid-session. Any change near the start of the prompt throws the whole cache away, and you pay full price to build it again.`,
 
-  yourChanges: `Everything above is what caching does for you automatically. This is the part you caused.
+  yourChanges: `Everything in the caching figure happens automatically. This is the part you caused.
 
-It compares what you're doing now against your own worst week — huge tool results, context being rebuilt over and over — and prices the gap.
+It takes your worst week's daily rate for each habit — huge tool results, context rebuilt over and over — and adds up, day by day, how far under it you came.
 
-It assumes you'd still be at your worst if you'd changed nothing, so read it as a fair estimate, not a fact.`,
+Only days you actually beat your worst count. A steady week at your worst rate adds nothing, which is why this is a much smaller number than the caching one.
+
+It still assumes you'd have stayed at your worst if you'd changed nothing, so read it as a fair estimate rather than a fact.`,
 
   hitRate: `Of everything Claude read, this much came from cache instead of being paid for in full.
 
@@ -60,11 +62,13 @@ Name the ones you recognise and the label sticks.`,
 
 Where a pattern is counted in tokens it gets a dollar figure. Where it's counted in calls, it doesn't — guessing a token cost per call would be inventing a number.`,
 
-  perTurn: `Roughly what one turn costs you, averaged over the week.
+  perTurn: `What one prompt of yours costs, on average, for the whole week.
 
-Falling means the work itself got leaner — shorter context, fewer wasted reads — regardless of how much you did.
+A "prompt" here means something you actually typed. Claude Code files tool results as user messages too, but those aren't turns — counting them would divide this number by about eight and make everything look cheaper than it is.
 
-It's a rate, so it never gets added into a dollar total. A quiet week and an efficient week look identical in a total; they look different here.`,
+Rising isn't automatically bad. It usually means each prompt is doing more: longer agent runs, more tool calls, more files touched. It's worth a look when it climbs and you don't think you asked for more.
+
+It's a rate, so it never gets added into a dollar total. A quiet week and an efficient week look the same in a total; they look different here.`,
 
   forecast: `Last week's spend, multiplied out to a year.
 
@@ -255,12 +259,14 @@ function efficiencyCard(s) {
   const better = e.change_pct < 0;
   return `
     <div class="card" style="margin-top:16px">
-      <h3>What one turn costs you ${tip(TIPS.perTurn)}</h3>
+      <h3>What one prompt costs you ${tip(TIPS.perTurn)}</h3>
       <p class="lede" style="font-size:14px">
-        An average turn went from <b>${fmt.int(e.first_tokens_per_turn)}</b> tokens to
+        One prompt went from <b>${fmt.int(e.first_tokens_per_turn)}</b> tokens to
         <b>${fmt.int(e.latest_tokens_per_turn)}</b> —
-        <b class="${better ? 'good' : 'bad'}">${better ? 'down' : 'up'} ${Math.abs(e.change_pct)}%</b>.
-        ${better ? 'The work itself got leaner.' : 'Turns are getting heavier — worth a look at what changed.'}
+        <b class="${better ? 'good' : ''}">${better ? 'down' : 'up'} ${Math.abs(e.change_pct)}%</b>.
+        ${better
+          ? 'Each prompt is doing the same work for fewer tokens.'
+          : 'Each prompt is doing more — longer runs, more tool calls. Not a problem in itself, but worth a look if you didn\'t mean to ask for more.'}
       </p>
       <div class="bars">
         ${pts.map(p => `

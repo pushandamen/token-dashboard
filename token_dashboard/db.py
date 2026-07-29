@@ -232,11 +232,19 @@ def best_project_name(cwds, slug: str) -> str:
     return project_name_for(cwds[0] if cwds else None, slug)
 
 
+# A "turn" is a prompt YOU typed. Claude Code writes tool results as
+# `type: "user"` rows too, so counting every user row inflates the figure by
+# roughly 8x — 40,274 user rows in one real history, of which only 5,094 were
+# actual prompts. `prompt_text` is populated only for the real ones, which is
+# what `expensive_prompts` has always keyed off.
+TURNS = "SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END)"
+
+
 def overview_totals(db_path, since=None, until=None) -> dict:
     rng, args = _range_clause(since, until)
     sql = f"""
       SELECT COUNT(DISTINCT session_id) AS sessions,
-             SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
+             SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
              COALESCE(SUM(input_tokens),0)            AS input_tokens,
              COALESCE(SUM(output_tokens),0)           AS output_tokens,
              COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
@@ -277,7 +285,7 @@ def project_summary(db_path, since=None, until=None) -> list:
     sql = f"""
       SELECT project_slug,
              COUNT(DISTINCT session_id) AS sessions,
-             SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
+             SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
              COALESCE(SUM(input_tokens), 0)  AS input_tokens,
              COALESCE(SUM(output_tokens), 0) AS output_tokens,
              SUM(input_tokens)+SUM(output_tokens)
@@ -319,7 +327,7 @@ def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
     sql = f"""
       SELECT session_id, project_slug,
              MIN(timestamp) AS started, MAX(timestamp) AS ended,
-             SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
+             SUM(CASE WHEN type='user' AND prompt_text IS NOT NULL THEN 1 ELSE 0 END) AS turns,
              SUM(input_tokens)+SUM(output_tokens) AS tokens
         FROM messages m
        WHERE 1=1 {rng}
