@@ -231,3 +231,43 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   .glossary dl { grid-template-columns: 1fr; gap: 4px 0; }
   .glossary dt { margin-top: 10px; }
 }
+
+/* --- savings tab ---------------------------------------------------------- */
+/* The ⓘ next to every dollar figure. Native title= so the explanation is
+   available without JS and to screen readers via aria-label. */
+.why {
+  display: inline-block; width: 14px; height: 14px; line-height: 14px;
+  text-align: center; border-radius: 50%; font-size: 10px; cursor: help;
+  color: var(--muted); border: 1px solid var(--border-2); vertical-align: 1px;
+}
+.why:hover, .why:focus { color: var(--accent); border-color: var(--accent); outline: none; }
+
+.grid-3 { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 720px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } }
+.tile { margin: 0; }
+.tile-label { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.tile-value { margin-top: 6px; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile-value.good { color: var(--good); }
+
+tr.total td { border-top: 1px solid var(--border-2); }
+.badge.warn  { color: var(--warn); border-color: rgba(232,162,59,0.3); background: rgba(232,162,59,0.08); }
+.badge.bad   { color: var(--bad);  border-color: rgba(229,72,77,0.3);  background: rgba(229,72,77,0.08); }
+.badge.fable { color: var(--warn); border-color: rgba(232,162,59,0.3); background: rgba(232,162,59,0.08); }
+.badge.gpt   { color: var(--good); border-color: rgba(63,182,139,0.3); background: rgba(63,182,139,0.08); }
+
+/* weekly tokens-per-turn columns */
+.bars { display: flex; align-items: flex-end; gap: 8px; height: 110px; }
+.bar-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+           align-items: center; height: 100%; gap: 6px; }
+.bar-fill { width: 100%; border-radius: 3px 3px 0 0; background: var(--accent); }
+.bar-lab { font-size: 10px; color: var(--muted-2); font-family: var(--mono); }
+
+.label-in {
+  width: 100%; min-width: 150px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px;
+  font-family: var(--sans); font-size: 12px;
+}
+.label-in::placeholder { color: var(--muted-2); }
+.label-in:focus { outline: none; border-color: var(--accent); }
+.label-in.saving { opacity: 0.6; }
+.label-in.saved  { border-color: var(--good); }

@@ -67,7 +67,9 @@ python3 cli.py dashboard --projects-dir /path/to/projects --db /path/to/cache.db
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Where to scan for session JSONL files |
 | `TOKEN_DASHBOARD_DB` | `~/.claude/token-dashboard.db` | SQLite cache location |
 
-Pricing lives in [`pricing.json`](pricing.json). Edit it directly if model prices change or to add a new plan.
+Pricing lives in [`pricing.json`](pricing.json). Edit it directly if model prices change or to add a new plan — **the server reads it once at startup**, so restart the dashboard afterwards rather than just reloading the page. The Settings tab renders the whole table, including the tier fallbacks used for models with no exact entry.
+
+A model that matches neither an exact entry nor a tier is **not** silently costed at zero — it's listed as a gap on the Overview and Savings tabs with its token count, so the hole is visible rather than quietly wrong.
 
 ## CLI reference
 
@@ -86,7 +88,7 @@ python3 cli.py dashboard --no-scan   # skip the initial scan (use cached DB only
 
 Change the port: `PORT=9000 python3 cli.py dashboard`.
 
-## The 7 tabs
+## The tabs
 
 The dashboard is a single page with a hash-router tab bar across the top. Each tab is backed by its own JSON API under `/api/`:
 
@@ -95,10 +97,31 @@ The dashboard is a single page with a hash-router tab bar across the top. Each t
 - **Sessions** — turn-by-turn view of any single session, with per-turn tokens and tool calls.
 - **Projects** — per-project comparison: tokens, session counts, and which files were touched most.
 - **Skills** — which skills you invoke most often, and (where we can measure them) their token cost. See [limitations](docs/KNOWN_LIMITATIONS.md#skills-token-counts-are-partial).
+- **Savings** — what your optimizations were worth. See below.
 - **Tips** — rule-based suggestions for reducing token usage (repeated file reads, oversized tool results, low cache-hit rate, etc.).
-- **Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere else reflect your actual plan.
+- **Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere else reflect your actual plan, and read the full rate table.
 
 The Overview tab also has a built-in "What do these numbers mean?" panel that explains input/output/cache tokens in plain English.
+
+## Savings
+
+The Savings tab answers "what did all that optimizing actually buy me", and is careful about which figures deserve to be believed:
+
+- **Exact** — prompt caching. Cache reads bill at a tenth of input and writes bill at a premium, so the net saving is arithmetic on measured tokens and published rates. Nothing to argue with.
+- **Attributed** — waste avoided against *your own worst week*. Both ends are measured, but it assumes you'd otherwise still be running at your peak rate, which is unprovable.
+- **Forecast** — an annual run-rate, labelled as such and deliberately excluded from the totals.
+
+It also finds **change points**: days when a metric stepped down and stayed down — a file you stopped re-reading, tokens-per-turn falling, cache rebuilds dropping off. The dashboard can see the drop and price it per week; it cannot know *what you changed*, so each one has a box to name it. Labels persist.
+
+Every dollar figure carries an ⓘ explaining exactly how it was computed, including what it excludes.
+
+## Codex
+
+Claude Code's transcripts record that a `codex exec` call happened, not what it cost — those tokens are spent in a separate process. So the scanner also reads Codex's own rollout logs at `~/.codex/sessions/`, which makes skills that delegate to it (`/grill-me-codex`, `/codex-review`) visible in the totals.
+
+Point it elsewhere with `--codex-dir` or `CODEX_SESSIONS_DIR`. If you don't use Codex, the directory won't exist and the scan is a no-op.
+
+Costs there are **API-equivalent**: if your Codex runs go through a ChatGPT subscription, it's what those tokens would have cost on the API, not money you were charged.
 
 ## The glance bundle
 

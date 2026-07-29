@@ -30,6 +30,28 @@ function withSince(url, since) {
   return url + (url.includes('?') ? '&' : '?') + 'since=' + encodeURIComponent(since);
 }
 
+/** Spell out how the cost figure was reached, including anything it excludes. */
+function costWhy(totals) {
+  const parts = [
+    'Each model\'s tokens x that model\'s rate from pricing.json, summed — input, output, '
+    + 'cache reads and cache writes are priced separately, then added up.',
+  ];
+  if (totals.cost_estimated) {
+    parts.push('At least one model had no exact entry and was priced at its tier\'s fallback rate, '
+      + 'so this is an approximation.');
+  }
+  const gaps = totals.unpriced_models || [];
+  if (gaps.length) {
+    parts.push('EXCLUDED — no price for: '
+      + gaps.map(g => `${g.model} (${fmt.int(g.billable_tokens)} tokens)`).join(', ')
+      + '. Add them to pricing.json to bring them into this figure.');
+  }
+  parts.push('It is what these tokens would cost on the API — not necessarily what you were '
+    + 'charged, if you are on a subscription.');
+  const txt = parts.join(' ');
+  return `<span class="why" tabindex="0" title="${fmt.htmlSafe(txt)}" aria-label="How this was computed: ${fmt.htmlSafe(txt)}">ⓘ</span>`;
+}
+
 export default async function (root) {
   const range = readRange();
   const since = sinceIso(range);
@@ -74,7 +96,7 @@ export default async function (root) {
       ${kpi('Cache read',   fmt.compact(totals.cache_read_tokens),  fmt.int(totals.cache_read_tokens) + ' tokens')}
       ${kpi('Cache create', fmt.compact(cacheCreate),               fmt.int(cacheCreate) + ' tokens')}
       <div class="card kpi cost">
-        <div class="label">Est. cost</div>
+        <div class="label">Est. cost ${costWhy(totals)}</div>
         <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
         ${planSubtitle()}
       </div>

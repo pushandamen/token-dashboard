@@ -15,9 +15,11 @@ from .db import (
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
 )
-from .pricing import load_pricing, cost_for, get_plan, set_plan
+from .pricing import load_pricing, cost_for, get_plan, plan_is_set, set_plan, total_cost
+from .savings import build_savings, set_label
 from .tips import all_tips, dismiss_tip
 from .scanner import scan_dir
+from .codex import scan_codex
 from .skills import cached_catalog
 
 
@@ -90,12 +92,10 @@ def build_handler(db_path: str, projects_dir: str):
                 return _serve_static(self, path[5:])
             if path == "/api/overview":
                 totals = overview_totals(db_path, since, until)
-                cost_usd = 0.0
-                for m in model_breakdown(db_path, since, until):
-                    c = cost_for(m["model"], m, pricing)
-                    if c["usd"] is not None:
-                        cost_usd += c["usd"]
-                totals["cost_usd"] = round(cost_usd, 4)
+                cost = total_cost(model_breakdown(db_path, since, until), pricing)
+                totals["cost_usd"] = cost["usd"]
+                totals["cost_estimated"] = cost["estimated"]
+                totals["unpriced_models"] = cost["unpriced"]
                 return _send_json(self, totals)
             if path == "/api/prompts":
                 limit = _clamp_limit(qs.get("limit", ["50"])[0], 50)
@@ -137,10 +137,16 @@ def build_handler(db_path: str, projects_dir: str):
             if path.startswith("/api/sessions/"):
                 sid = path.rsplit("/", 1)[1]
                 return _send_json(self, session_turns(db_path, sid))
+            if path == "/api/savings":
+                return _send_json(self, build_savings(db_path))
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))
             if path == "/api/plan":
-                return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
+                return _send_json(self, {
+                    "plan": get_plan(db_path),
+                    "plan_set": plan_is_set(db_path),
+                    "pricing": pricing,
+                })
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)
@@ -184,6 +190,15 @@ def build_handler(db_path: str, projects_dir: str):
             if url.path == "/api/tips/dismiss":
                 dismiss_tip(db_path, body.get("key", ""))
                 return _send_json(self, {"ok": True})
+            if url.path == "/api/savings/label":
+                key = str(body.get("key", "")).strip()
+                if not key:
+                    return _send_error(self, 400, "key is required")
+                label = str(body.get("label", ""))
+                if len(label) > 200:
+                    return _send_error(self, 400, "label too long (max 200 chars)")
+                set_label(db_path, key, label)
+                return _send_json(self, {"ok": True})
             self.send_response(404)
             self.end_headers()
 
@@ -194,6 +209,9 @@ def _scan_loop(db_path: str, projects_dir: str, interval: float = 30.0):
     while True:
         try:
             n = scan_dir(projects_dir, db_path)
+            # Codex too, or a /grill-me-codex run finished while the dashboard
+            # was open would stay invisible until the next manual scan.
+            scan_codex(None, db_path)
             if n["messages"] > 0:
                 EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
         except Exception as e:

@@ -8,6 +8,7 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from token_dashboard.codex import default_sessions_dir, scan_codex
 from token_dashboard.db import init_db, default_db_path, overview_totals
 from token_dashboard.glance import build_glance
 from token_dashboard.scanner import scan_dir
@@ -26,6 +27,14 @@ def _projects(args) -> str:
     )
 
 
+def _codex(args) -> str:
+    return (
+        getattr(args, "codex_dir", None)
+        or os.environ.get("CODEX_SESSIONS_DIR")
+        or str(default_sessions_dir())
+    )
+
+
 def _today_range():
     now = datetime.now(timezone.utc)
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
@@ -38,6 +47,8 @@ def cmd_scan(args):
     init_db(db)
     n = scan_dir(_projects(args), db)
     print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
+    c = scan_codex(_codex(args), db)
+    print(f"Token Dashboard: scanned {c['sessions']} Codex sessions")
 
 
 def cmd_today(args):
@@ -99,6 +110,7 @@ def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", help="SQLite path (default ~/.claude/token-dashboard.db)")
     common.add_argument("--projects-dir", help="JSONL root (default ~/.claude/projects)")
+    common.add_argument("--codex-dir", help="Codex rollout logs (default ~/.codex/sessions)")
 
     p = argparse.ArgumentParser(prog="token-dashboard", description="Local Claude Code usage dashboard", parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)

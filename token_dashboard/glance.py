@@ -23,10 +23,8 @@ from .db import (
     project_summary,
     recent_sessions,
 )
-from .pricing import cost_for, format_for_user, get_plan, load_pricing
+from .pricing import DEFAULT_PRICING, format_for_user, get_plan, load_pricing, total_cost
 from .tips import all_tips
-
-DEFAULT_PRICING = Path(__file__).resolve().parent.parent / "pricing.json"
 
 DAILY_DAYS = 14
 TOP_PROJECTS = 5
@@ -40,19 +38,10 @@ def _day_bounds(now: datetime) -> tuple:
     return start.isoformat(), (start + timedelta(days=1)).isoformat()
 
 
-def _cost_usd(db_path, pricing: dict, since=None, until=None) -> float:
-    """API-equivalent dollars for a range, summed per model like /api/overview."""
-    total = 0.0
-    for m in model_breakdown(db_path, since, until):
-        c = cost_for(m["model"], m, pricing)
-        if c["usd"] is not None:
-            total += c["usd"]
-    return round(total, 4)
-
-
 def _totals(db_path, pricing: dict, since=None, until=None) -> dict:
     t = overview_totals(db_path, since, until)
     cache_create = t["cache_create_5m_tokens"] + t["cache_create_1h_tokens"]
+    cost = total_cost(model_breakdown(db_path, since, until), pricing)
     return {
         "sessions": t["sessions"],
         "turns": t["turns"] or 0,
@@ -61,7 +50,9 @@ def _totals(db_path, pricing: dict, since=None, until=None) -> dict:
         "cache_read_tokens": t["cache_read_tokens"],
         "cache_create_tokens": cache_create,
         "billable_tokens": t["input_tokens"] + t["output_tokens"] + cache_create,
-        "cost_usd": _cost_usd(db_path, pricing, since, until),
+        "cost_usd": cost["usd"],
+        "cost_estimated": cost["estimated"],
+        "unpriced_models": cost["unpriced"],
     }
 
 

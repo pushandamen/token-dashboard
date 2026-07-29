@@ -16,11 +16,19 @@ Working codebase. 68 Python unit tests (`python3 -m unittest discover tests`). S
 
 This is a fork of [nateherkai/token-dashboard](https://github.com/nateherkai/token-dashboard) (MIT), maintained under `code/personal/` in the Second Brain vault. `origin` is `pushandamen/token-dashboard`; `upstream` is the original, fetch-only (its push URL is deliberately broken). Pull their work with `git pull upstream main`.
 
-Local additions so far: the `glance` command + `token_dashboard/glance.py`, and a GitHub Actions CI workflow running the unittest suite on 3.9 and 3.13.
+Local additions so far:
+
+- `glance` command + `token_dashboard/glance.py` — one JSON bundle for the ADA HUD.
+- **Repriced.** `pricing.json` listed Opus at $15/$75 (Opus 4.1-era) and had no entry for Fable, Opus 5, Sonnet 5, or Opus 4.8. Worse, `claude-fable-5` matched no tier substring, so `cost_for` returned `None` and every caller skipped it — 32M tokens costed at $0. Now every model in use prices exactly, unpriced models are reported instead of dropped, and `tips.py` reads rates from the table instead of its own hardcoded literals.
+- **Codex** (`token_dashboard/codex.py`) — reads `~/.codex/sessions/**/rollout-*.jsonl`, since Claude Code's transcripts don't record what a `codex exec` call spent.
+- **Savings tab** (`token_dashboard/savings.py`, `web/routes/savings.js`) — exact vs. attributed vs. forecast, plus change-point detection the human labels.
+- GitHub Actions CI running the unittest suite on 3.9 and 3.13.
 
 ## Architecture
 
 - `cli.py` → `token_dashboard/scanner.py` → `~/.claude/token-dashboard.db` (SQLite)
+- `token_dashboard/codex.py` reads Codex's own rollout logs into `codex_sessions`. Kept out of `messages` on purpose: that table's `(session_id, message_id)` dedup exists for Claude's streaming snapshots, whereas Codex writes a **cumulative running total** — so the last `token_count` event wins and summing them double-counts.
+- `token_dashboard/savings.py` separates exact (cache arithmetic) from attributed (waste vs. your own peak) from forecast. Never add the forecast into a total, and never price a *rate* metric — multiplying tokens-per-turn by seven yields nothing real.
 - `token_dashboard/server.py` exposes JSON APIs (`/api/*`) + SSE stream (`/api/stream`) + static frontend (`web/`)
 - `token_dashboard/glance.py` assembles one JSON bundle for external panels — `cli.py glance`, consumed by the ADA HUD's `/tokens` view. Reads SQLite directly; no server needed.
 - `web/` is vanilla JS, no build step — hash router + ECharts

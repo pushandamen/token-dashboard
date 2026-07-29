@@ -14,12 +14,17 @@ export const fmt = {
   htmlSafe: s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
   modelClass: m => {
     const s = (m || '').toLowerCase();
+    if (s.includes('fable') || s.includes('mythos')) return 'fable';
     if (s.includes('opus'))   return 'opus';
     if (s.includes('sonnet')) return 'sonnet';
     if (s.includes('haiku'))  return 'haiku';
+    if (s.includes('gpt') || s.includes('codex')) return 'gpt';
     return '';
   },
   modelShort: m => (m || '').replace('claude-', ''),
+  // Absolute paths eat a whole line before saying anything. The home prefix is
+  // the part that never identifies the file, so only that goes.
+  tildePath: s => (s ?? '').replace(/\/Users\/[^/\s]+\//g, '~/'),
   ts: t => (t || '').slice(0, 16).replace('T', ' '),
 };
 
@@ -29,7 +34,7 @@ export async function api(path, opts) {
   return r.json();
 }
 
-export const state = { plan: 'api', pricing: null };
+export const state = { plan: 'api', planSet: false, pricing: null };
 
 const ROUTES = {
   '/overview': () => import('/web/routes/overview.js'),
@@ -37,6 +42,7 @@ const ROUTES = {
   '/sessions': () => import('/web/routes/sessions.js'),
   '/projects': () => import('/web/routes/projects.js'),
   '/skills':   () => import('/web/routes/skills.js'),
+  '/savings':  () => import('/web/routes/savings.js'),
   '/tips':     () => import('/web/routes/tips.js'),
   '/settings': () => import('/web/routes/settings.js'),
 };
@@ -77,7 +83,10 @@ async function render() {
 }
 
 async function firstRun() {
-  if (localStorage.getItem('td.plan-set')) return;
+  // Server-side flag first: a plan chosen once shouldn't be asked for again in
+  // every new browser profile. localStorage stays as a fallback for anyone who
+  // dismissed it before the flag existed.
+  if (state.planSet || localStorage.getItem('td.plan-set')) return;
   const plans = Object.entries(state.pricing.plans);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -108,6 +117,7 @@ async function boot() {
   buildTopbar();
   const planResp = await api('/api/plan');
   state.plan = planResp.plan;
+  state.planSet = !!planResp.plan_set;
   state.pricing = planResp.pricing;
   $('#plan-pill').textContent = state.plan;
 

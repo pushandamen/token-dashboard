@@ -105,9 +105,17 @@ def repeated_target_tips(db_path, today_iso: Optional[str] = None) -> List[dict]
     return out
 
 
-def right_size_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
+def right_size_tips(db_path, today_iso: Optional[str] = None, pricing: Optional[dict] = None) -> List[dict]:
     today_iso = today_iso or datetime.utcnow().isoformat()
     since = _iso_days_ago(today_iso, 7)
+    # Rates come from pricing.json, not literals. These were hardcoded at
+    # $15/$75 vs $3/$15 — Opus 4.1 pricing — which made the suggested saving
+    # roughly 3x what switching to Sonnet actually recovers.
+    if pricing is None:
+        from .pricing import DEFAULT_PRICING, load_pricing
+        pricing = load_pricing(DEFAULT_PRICING)
+    opus = pricing["tier_fallback"]["opus"]
+    sonnet = pricing["tier_fallback"]["sonnet"]
     sql = """
       SELECT COUNT(*) AS n,
              SUM(input_tokens+cache_create_5m_tokens+cache_create_1h_tokens) AS in_tok,
@@ -121,8 +129,8 @@ def right_size_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
         row = c.execute(sql, (since,)).fetchone()
     if not row or (row["n"] or 0) < 10:
         return []
-    api_opus   = ((row["in_tok"] or 0) * 15 + (row["out_tok"] or 0) * 75) / 1_000_000
-    api_sonnet = ((row["in_tok"] or 0) *  3 + (row["out_tok"] or 0) * 15) / 1_000_000
+    api_opus   = ((row["in_tok"] or 0) * opus["input"]   + (row["out_tok"] or 0) * opus["output"])   / 1_000_000
+    api_sonnet = ((row["in_tok"] or 0) * sonnet["input"] + (row["out_tok"] or 0) * sonnet["output"]) / 1_000_000
     savings = api_opus - api_sonnet
     if savings < 1.0:
         return []

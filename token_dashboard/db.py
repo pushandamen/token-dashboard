@@ -63,6 +63,32 @@ CREATE INDEX IF NOT EXISTS idx_tools_session ON tool_calls(session_id);
 CREATE INDEX IF NOT EXISTS idx_tools_name    ON tool_calls(tool_name);
 CREATE INDEX IF NOT EXISTS idx_tools_target  ON tool_calls(target);
 
+-- Codex (OpenAI) sessions, from ~/.codex/sessions/**/rollout-*.jsonl. Kept in
+-- their own table rather than folded into `messages`: that schema and its
+-- (session_id, message_id) dedup key are shaped around Claude Code's streaming
+-- snapshots, and Codex writes one cumulative running total instead. One row
+-- per rollout file. `input_tokens` is inclusive of `cached_input_tokens`, and
+-- `output_tokens` is inclusive of `reasoning_output_tokens` — both as OpenAI
+-- reports them; split them at pricing time, not here.
+CREATE TABLE IF NOT EXISTS codex_sessions (
+  session_id             TEXT PRIMARY KEY,
+  path                   TEXT NOT NULL,
+  cwd                    TEXT,
+  project_slug           TEXT NOT NULL,
+  model                  TEXT,
+  originator             TEXT,
+  started                TEXT,
+  ended                  TEXT,
+  turns                  INTEGER NOT NULL DEFAULT 0,
+  input_tokens           INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens    INTEGER NOT NULL DEFAULT 0,
+  output_tokens          INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_codex_ended   ON codex_sessions(ended);
+CREATE INDEX IF NOT EXISTS idx_codex_project ON codex_sessions(project_slug);
+CREATE INDEX IF NOT EXISTS idx_codex_model   ON codex_sessions(model);
+
 CREATE TABLE IF NOT EXISTS plan (
   k TEXT PRIMARY KEY,
   v TEXT
@@ -71,6 +97,16 @@ CREATE TABLE IF NOT EXISTS plan (
 CREATE TABLE IF NOT EXISTS dismissed_tips (
   tip_key       TEXT PRIMARY KEY,
   dismissed_at  REAL NOT NULL
+);
+
+-- What the human calls a detected step-change. The scanner can see that reads
+-- of a file fell off a cliff on the 26th; only the human knows that was
+-- "split living-system.md out of CLAUDE.md". Keyed by the detector's stable
+-- change key so a label survives rescans.
+CREATE TABLE IF NOT EXISTS optimization_labels (
+  change_key  TEXT PRIMARY KEY,
+  label       TEXT NOT NULL,
+  noted_at    REAL NOT NULL
 );
 """
 
@@ -148,6 +184,16 @@ def _walk_to_root(cwd: str, slug: str) -> Optional[str]:
             if name:
                 return name
     return None
+
+
+def slug_for_cwd(cwd: Optional[str]) -> str:
+    """Project slug for a working directory, using Claude Code's own encoding.
+
+    Claude Code derives its `~/.claude/projects/<slug>` directory names this
+    way, so a Codex session run from the same directory lands on the same slug
+    and the two sources line up per project for free.
+    """
+    return _encode_slug((cwd or "").rstrip("/\\"))
 
 
 def project_name_for(cwd: Optional[str], fallback_slug: str) -> str:
