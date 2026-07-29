@@ -12,10 +12,17 @@ Inspired by [phuryn/claude-usage](https://github.com/phuryn/claude-usage) but di
 
 Working codebase. 68 Python unit tests (`python3 -m unittest discover tests`). Seven UI tabs wired up (Overview, Prompts, Sessions, Projects, Skills, Tips, Settings). Runs on macOS, Windows, and Linux.
 
+## Fork
+
+This is a fork of [nateherkai/token-dashboard](https://github.com/nateherkai/token-dashboard) (MIT), maintained under `code/personal/` in the Second Brain vault. `origin` is `pushandamen/token-dashboard`; `upstream` is the original, fetch-only (its push URL is deliberately broken). Pull their work with `git pull upstream main`.
+
+Local additions so far: the `glance` command + `token_dashboard/glance.py`, and a GitHub Actions CI workflow running the unittest suite on 3.9 and 3.13.
+
 ## Architecture
 
 - `cli.py` → `token_dashboard/scanner.py` → `~/.claude/token-dashboard.db` (SQLite)
 - `token_dashboard/server.py` exposes JSON APIs (`/api/*`) + SSE stream (`/api/stream`) + static frontend (`web/`)
+- `token_dashboard/glance.py` assembles one JSON bundle for external panels — `cli.py glance`, consumed by the ADA HUD's `/tokens` view. Reads SQLite directly; no server needed.
 - `web/` is vanilla JS, no build step — hash router + ECharts
 
 ## Data source

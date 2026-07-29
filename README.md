@@ -76,6 +76,7 @@ python3 cli.py scan          # populate / refresh the local DB, then exit
 python3 cli.py today         # today's totals (terminal)
 python3 cli.py stats         # all-time totals (terminal)
 python3 cli.py tips          # active suggestions (terminal)
+python3 cli.py glance        # one JSON bundle for external panels (machine output)
 python3 cli.py dashboard     # scan + serve the UI at http://localhost:8080
 
 # dashboard flags
@@ -98,6 +99,16 @@ The dashboard is a single page with a hash-router tab bar across the top. Each t
 - **Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere else reflect your actual plan.
 
 The Overview tab also has a built-in "What do these numbers mean?" panel that explains input/output/cache tokens in plain English.
+
+## The glance bundle
+
+`python3 cli.py glance` prints a single JSON object on stdout — today's totals, all-time totals, a 14-day daily series, the five heaviest projects, the top tips, and the three most recent sessions. It reads the SQLite cache directly, so it works with nothing listening on port 8080:
+
+```bash
+python3 cli.py glance | python3 -m json.tool
+```
+
+It exists for external panels that want one fetch instead of seven tab endpoints. Here it feeds the ADA HUD's `/tokens` view (`lib/tokens.ts` in the `ada-hud` repo shells out to this command). Nothing but JSON goes to stdout, so it pipes cleanly.
 
 ## Troubleshooting
 

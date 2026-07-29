@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from token_dashboard.db import init_db, default_db_path, overview_totals
+from token_dashboard.glance import build_glance
 from token_dashboard.scanner import scan_dir
 from token_dashboard.tips import all_tips
 
@@ -70,6 +72,13 @@ def cmd_tips(args):
         print(f"  {tip['body']}\n")
 
 
+def cmd_glance(args):
+    """JSON bundle for external panels (the ADA HUD). Machine output only."""
+    db = _db_path(args)
+    init_db(db)
+    print(json.dumps(build_glance(db), separators=(",", ":")))
+
+
 def cmd_dashboard(args):
     db = _db_path(args)
     init_db(db)
@@ -97,6 +106,7 @@ def main():
     sub.add_parser("today", parents=[common]).set_defaults(func=cmd_today)
     sub.add_parser("stats", parents=[common]).set_defaults(func=cmd_stats)
     sub.add_parser("tips",  parents=[common]).set_defaults(func=cmd_tips)
+    sub.add_parser("glance", parents=[common]).set_defaults(func=cmd_glance)
     d = sub.add_parser("dashboard", parents=[common])
     d.add_argument("--no-scan", action="store_true")
     d.add_argument("--no-open", action="store_true")
