@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # The project is stdlib-only by design (see CLAUDE.md § Conventions), so there is
 # nothing to install — CI just runs the unittest suite on the oldest and newest
