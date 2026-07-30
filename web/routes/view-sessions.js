@@ -1,10 +1,11 @@
-import { api, fmt, readRange, sinceIso, withSince, rangeControl, wireRange } from '/web/app.js';
+import { api, fmt, readRange, sinceIso, withSince, rangeControl, wireRange, projectLabeller } from '/web/app.js';
 
 const h = fmt.htmlSafe;
 
 export async function view(root) {
   const range = readRange();
   const list = await api(withSince('/api/sessions?limit=100', sinceIso(range)));
+  const label = projectLabeller(list);
 
   root.innerHTML = `
     <div class="card">
@@ -24,7 +25,7 @@ export async function view(root) {
               <tr>
                 <td class="mono">${fmt.ts(s.started)}</td>
                 <td class="blur-sensitive" title="${h(s.project_slug)}">
-                  <a href="#/sessions/${encodeURIComponent(s.session_id)}">${h(s.project_name || s.project_slug)}</a>
+                  <a href="#/sessions/${encodeURIComponent(s.session_id)}">${h(label(s))}</a>
                 </td>
                 <td class="num">${fmt.int(s.turns)}</td>
                 <td class="num">${fmt.int(s.tokens)}</td>

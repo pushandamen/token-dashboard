@@ -1,4 +1,4 @@
-import { api, fmt, readRange, sinceIso, withSince, rangeControl, wireRange } from '/web/app.js';
+import { api, fmt, readRange, sinceIso, withSince, rangeControl, wireRange, projectLabeller } from '/web/app.js';
 
 const h = fmt.htmlSafe;
 const money = n => (n == null ? '—' : Math.abs(n) >= 100 ? fmt.usd0(n) : fmt.usd(n));
@@ -6,6 +6,7 @@ const money = n => (n == null ? '—' : Math.abs(n) >= 100 ? fmt.usd0(n) : fmt.u
 export async function view(root) {
   const range = readRange();
   const rows = await api(withSince('/api/projects', sinceIso(range)));
+  const label = projectLabeller(rows);
   const sorted = [...rows].sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
 
   root.innerHTML = `
@@ -32,7 +33,7 @@ export async function view(root) {
           <tbody>
             ${sorted.map(r => `
               <tr>
-                <td class="blur-sensitive" title="${h(r.project_slug)}">${h(r.project_name || r.project_slug)}</td>
+                <td class="blur-sensitive" title="${h(r.project_slug)}">${h(label(r))}</td>
                 <td class="num">${money(r.cost_usd)}</td>
                 <td class="num">${fmt.int(r.sessions)}</td>
                 <td class="num">${fmt.int(r.turns)}</td>

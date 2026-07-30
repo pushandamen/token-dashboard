@@ -15,6 +15,8 @@ function css(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+const SANS = 'Inter, system-ui, sans-serif';
+
 function theme() {
   return {
     ink:   css('--ink'),
@@ -24,8 +26,12 @@ function theme() {
     lineStrong: css('--line-strong'),
     panel: css('--panel'),
     accent: css('--accent'),
+    // The reference's single data hue. Every one-series chart is this green;
+    // --cat-* only comes out when there is genuinely more than one series.
+    data:  css('--data'),
     // --cat-*, not --tok-* + --accent: several of those resolve to the same
-    // hex, which put two identical colours in one donut legend.
+    // hex, which put two identical colours in one donut legend. --cat-1 IS the
+    // data green by design, so a lone series and a first slice agree.
     series: [
       css('--cat-1'), css('--cat-2'), css('--cat-3'),
       css('--cat-4'), css('--cat-5'), css('--cat-6'),
@@ -79,7 +85,7 @@ function bindResize() {
 
 function base(t) {
   return {
-    textStyle: { color: t.ink2, fontFamily: 'Inter, system-ui, sans-serif' },
+    textStyle: { color: t.ink2, fontFamily: SANS },
     color: t.series,
     grid: { left: 4, right: 6, top: 20, bottom: 2, containLabel: true },
     animationDuration: 260,
@@ -91,9 +97,11 @@ function xAxis(t, data, extra = {}) {
     type: 'category',
     data,
     boundaryGap: true,
-    axisLine: { lineStyle: { color: t.line } },
+    // No axis line. The reference draws dates and nothing else — a rule under
+    // every chart was one horizontal line per cell for no information.
+    axisLine: { show: false },
     axisTick: { show: false },
-    axisLabel: { color: t.ink3, fontSize: 10, hideOverlap: true },
+    axisLabel: { color: t.ink3, fontSize: 9.5, hideOverlap: true, fontFamily: SANS },
     ...extra,
   };
 }
@@ -103,8 +111,10 @@ function yAxis(t, extra = {}) {
     type: 'value',
     axisLine: { show: false },
     axisTick: { show: false },
-    splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
-    axisLabel: { color: t.ink3, fontSize: 10, formatter: tickFmt },
+    // Solid hairline, not dashed. Dashes read as a second kind of mark; at this
+    // weight a solid rule disappears behind the data, which is the job.
+    splitLine: { lineStyle: { color: t.line, type: 'solid' } },
+    axisLabel: { color: t.ink3, fontSize: 9.5, formatter: tickFmt, fontFamily: SANS },
     ...extra,
   };
 }
@@ -115,89 +125,88 @@ function tooltip(t, extra = {}) {
     backgroundColor: t.panel,
     borderColor: t.lineStrong,
     borderWidth: 1,
-    padding: [9, 12],
-    textStyle: { color: t.ink, fontFamily: 'Inter, system-ui, sans-serif', fontSize: 12 },
-    extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.18); border-radius: 8px;',
+    padding: [8, 11],
+    textStyle: { color: t.ink, fontFamily: SANS, fontSize: 11.5 },
+    extraCssText: 'box-shadow: 0 8px 22px rgba(0,0,0,.22); border-radius: 6px;',
     ...extra,
   };
 }
 
-/** A number with no axes, no grid and no labels. Used inside stat tiles, where
- *  the shape of the trend is the whole message and the values are already
- *  printed above it. */
-export function sparkline(el, values, color, onSelect) {
+/** A metric cell's chart, exactly as the reference draws it.
+ *
+ *  Dates along the bottom and nothing else: no y-axis, no tick labels, no
+ *  gridlines, no axis rule. The value is already printed at the top of the cell
+ *  in full, so a y-axis would be a second, worse copy of a number the reader has
+ *  read — and six cells of scaffolding is what made the old grid feel busy. The
+ *  trend's SHAPE is the only thing this adds, so the shape is all it draws.
+ *
+ *  Hovering still gives the exact figure through the tooltip, which is where a
+ *  precise mid-series value belongs. */
+export function metricChart(el, { x, values, color, valueFormatter, onSelect }) {
   const c = mount(el);
   if (!c) return null;
   bindResize();
-  if (onSelect) {
-    el.style.cursor = 'crosshair';
-    // Same trick as the hero line: a 1.5px stroke is not a click target, so map
-    // the x pixel back to an index across the whole box.
-    c.getZr().on('click', e => {
-      const w = el.clientWidth || 1;
-      const i = Math.round((e.offsetX / w) * (values.length - 1));
-      if (i >= 0 && i < values.length) onSelect(i);
-    });
-  }
   const t = theme();
-  const hue = color || t.accent;
-  c.setOption({
-    grid: { left: 0, right: 0, top: 2, bottom: 0 },
-    xAxis: { type: 'category', show: false, boundaryGap: false, data: values.map((_, i) => i) },
-    yAxis: { type: 'value', show: false, min: 0 },
-    tooltip: { show: false },
-    series: [{
-      type: 'line',
-      data: values,
-      smooth: 0.35,
-      showSymbol: false,
-      lineStyle: { width: 1.5, color: hue },
-      areaStyle: {
-        color: {
-          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: hue + '4d' },
-            { offset: 1, color: hue + '00' },
-          ],
-        },
-      },
-    }],
-    animation: false,
-  });
-  return c;
-}
+  const hue = color || t.data;
 
-/** The hero trend: one filled line, minimal furniture, dates on the x-axis. */
-export function areaChart(el, { x, values, color, valueFormatter, tickFormatter, onSelect }) {
-  const c = mount(el);
-  if (!c) return null;
-  bindResize();
-  const t = theme();
-  const hue = color || t.accent;
+  // Edge labels are centred on their tick, so half of the first and last sit
+  // outside the box. Two ways to fix that, and which one is right depends on
+  // how much room there is:
+  //   wide  — pull the edge labels inward (alignMin/MaxLabel) and keep the line
+  //           full-bleed, which is what the reference does.
+  //   narrow — inset the grid instead. Pulling them inward at 406px put "29 Jun"
+  //           0.1px from "2 Jul", so they read as one string. hideOverlap never
+  //           fires because they do not technically overlap.
+  const narrow = (el.clientWidth || 0) < 520;
+  const inset = narrow ? 15 : 0;
+
   c.setOption({
     ...base(t),
-    grid: { left: 4, right: 8, top: 12, bottom: 0, containLabel: true },
+    // bottom must clear the axis label AND its margin, or the SVG viewBox
+    // shears the glyph bottoms off — at 16 every date lost 3.4px and "Jul"
+    // rendered as something closer to "lul". Set explicitly rather than via
+    // containLabel: there is no y-axis here, so containLabel would only
+    // re-derive this one number, less predictably.
+    grid: { left: inset, right: inset, top: 8, bottom: 24, containLabel: false },
     tooltip: tooltip(t, {
-      axisPointer: { type: 'line', lineStyle: { color: t.lineStrong } },
+      axisPointer: { type: 'line', lineStyle: { color: t.lineStrong, width: 1 } },
       valueFormatter: valueFormatter || (v => Number(v).toLocaleString()),
     }),
-    xAxis: xAxis(t, x, { boundaryGap: false }),
-    yAxis: yAxis(t, {
-      splitNumber: 3,
-      axisLabel: { color: t.ink3, fontSize: 10, formatter: tickFormatter || tickFmt },
+    xAxis: xAxis(t, x, {
+      boundaryGap: false,
+      // Only the ends and a couple of interior ticks; the reference labels
+      // roughly six points across a six-month span, never every category.
+      //
+      // alignMin/MaxLabel keep the grid full-bleed AND the end dates whole. A
+      // label is centred on its tick, so the last one sat half outside the box
+      // and rendered as "29" where it should read "29 Jul"; the alternative fix
+      // — insetting the grid — stops the line short of the cell edge, which is
+      // the one thing the reference never does.
+      axisLabel: {
+        color: t.ink3, fontSize: 9.5, fontFamily: SANS, hideOverlap: true,
+        showMinLabel: true, showMaxLabel: true, margin: 9,
+        ...(narrow ? {} : { alignMinLabel: 'left', alignMaxLabel: 'right' }),
+      },
     }),
+    yAxis: {
+      type: 'value',
+      show: false,
+      // Floor at zero so a flat series sits on the baseline rather than being
+      // auto-scaled into a dramatic-looking wiggle across three dollars.
+      min: 0,
+    },
     series: [{
       type: 'line',
       data: values,
-      smooth: 0.3,
+      smooth: 0.32,
       showSymbol: false,
-      lineStyle: { width: 2, color: hue },
+      lineStyle: { width: 1.4, color: hue },
       itemStyle: { color: hue },
       areaStyle: {
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [
-            { offset: 0, color: hue + '3d' },
+            { offset: 0, color: hue + '4a' },
             { offset: 1, color: hue + '00' },
           ],
         },
@@ -205,9 +214,6 @@ export function areaChart(el, { x, values, color, valueFormatter, tickFormatter,
     }],
   });
 
-  // A line drawn with showSymbol:false has almost nothing to hit, so listening
-  // for series clicks would mean asking the user to hit a 2px stroke. Take the
-  // click anywhere in the plot area and map the x pixel back to a category.
   if (onSelect) {
     el.style.cursor = 'crosshair';
     c.getZr().on('click', e => {
@@ -251,7 +257,7 @@ export function barChart(el, { categories, values, color, horizontal, onSelect }
       type: 'bar',
       data: values,
       itemStyle: {
-        color: color || t.accent,
+        color: color || t.data,
         borderRadius: horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0],
       },
       barMaxWidth: 22,
@@ -271,6 +277,13 @@ export function donutChart(el, data, {
   const total = data.reduce((a, d) => a + (d.value || 0), 0);
   const pctOf = v => (total ? (100 * v) / total : 0);
 
+  // Ring at 27% with a vertical legend pinned right needs about 520px to hold
+  // both. Below that the legend's three fixed columns (92+62+34) no longer fit
+  // the remaining space and its text lands on the ring — measured at 406px, the
+  // ring ended at 215 and the legend started at 217. Under the threshold the
+  // ring goes up top and the legend sits beneath it, full width.
+  const narrow = (el.clientWidth || 0) < 520;
+
   c.setOption({
     color: t.series,
     tooltip: tooltip(t, {
@@ -285,8 +298,9 @@ export function donutChart(el, data, {
     legend: {
       type: 'scroll',
       orient: 'vertical',
-      right: 4,
-      top: 'middle',
+      ...(narrow
+        ? { left: 'center', bottom: 0, top: 'auto' }
+        : { right: 4, top: 'middle' }),
       itemWidth: 8,
       itemHeight: 8,
       itemGap: 13,
@@ -298,9 +312,9 @@ export function donutChart(el, data, {
         color: t.ink2,
         fontSize: 11,
         rich: {
-          n: { color: t.ink2, fontSize: 11, width: 92 },
-          v: { color: t.ink, fontSize: 11, fontFamily: 'monospace', width: 62, align: 'right' },
-          p: { color: t.ink3, fontSize: 11, fontFamily: 'monospace', width: 34, align: 'right' },
+          n: { color: t.ink2, fontSize: 11, fontFamily: SANS, width: 92 },
+          v: { color: t.ink, fontSize: 11, fontFamily: SANS, width: 62, align: 'right' },
+          p: { color: t.ink3, fontSize: 11, fontFamily: SANS, width: 34, align: 'right' },
         },
       },
       formatter: name => {
@@ -315,8 +329,8 @@ export function donutChart(el, data, {
     },
     series: [{
       type: 'pie',
-      center: ['27%', '50%'],
-      radius: ['58%', '84%'],
+      center: narrow ? ['50%', '30%'] : ['27%', '50%'],
+      radius: narrow ? ['38%', '54%'] : ['58%', '84%'],
       avoidLabelOverlap: true,
       padAngle: 1.5,
       itemStyle: { borderColor: t.panel, borderWidth: 2, borderRadius: 6 },
@@ -328,10 +342,10 @@ export function donutChart(el, data, {
         position: 'center',
         formatter: () => `{v|${centerValue || ''}}\n{l|${centerLabel || ''}}`,
         rich: {
-          v: { color: t.ink, fontSize: 21, fontWeight: 500, fontFamily: 'monospace', lineHeight: 27 },
-          l: { color: t.ink3, fontSize: 10, fontWeight: 600, letterSpacing: 1 },
-          hv: { color: t.ink, fontSize: 19, fontWeight: 500, fontFamily: 'monospace', lineHeight: 25 },
-          hl: { color: t.ink3, fontSize: 10, fontWeight: 600 },
+          v: { color: t.ink, fontSize: 20, fontWeight: 400, fontFamily: SANS, lineHeight: 26 },
+          l: { color: t.ink3, fontSize: 10, fontWeight: 400, letterSpacing: 0.6 },
+          hv: { color: t.ink, fontSize: 18, fontWeight: 400, fontFamily: SANS, lineHeight: 24 },
+          hl: { color: t.ink3, fontSize: 10, fontWeight: 400 },
         },
       },
       emphasis: {

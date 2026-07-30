@@ -16,6 +16,10 @@
   } catch (e) {}
 })();
 </script>
+<!-- Ahead of the stylesheet: the CSS only asks for these once it has parsed
+     @font-face, by which point first paint has already happened in a system
+     face and every number shifts a pixel when Inter lands. -->
+<link rel="preload" href="/web/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/style.css">
 <script src="/web/echarts.min.js"></script>
 </head>

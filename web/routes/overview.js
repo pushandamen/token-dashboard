@@ -1,19 +1,23 @@
 import {
   api, fmt, tip, state, $$,
-  readRange, sinceIso, withSince, rangeControl, wireRange,
+  readRange, sinceIso, withSince, periodControl, wirePeriod, rangeSpan,
+  projectLabeller,
 } from '/web/app.js';
-import { areaChart, sparkline, donutChart, patch } from '/web/charts.js';
+import { metricChart, donutChart, patch } from '/web/charts.js';
 import { overlayShell, closeOverlay } from '/web/overlay.js';
 import { shortTool } from '/web/routes/view-tools.js';
 
 // Overview answers three questions in order, and nothing else:
-//   1. was this worth it?           → the hero
-//   2. where did it go?             → ranked projects, model split, tools
+//   1. was this worth it?           → the cost cell
+//   2. where did it go?             → ranked projects, model split
 //   3. what should I do about it?   → Worth fixing
 //
-// Everything that used to sit here as a seventh equal-weight KPI card is now a
-// stat tile under the hero or a column in Activity. Seven cards of identical
-// size rank nothing, which is why the old page was hard to read.
+// Laid out as Adaline's project dashboard is: the period picker IS the page
+// heading (it governs every number below it, and the sidebar already says which
+// page you're on), a thin strip of counts sits beside it, and the metrics are
+// borderless cells — name left, figure right, trend filling the rest. Session
+// and prompt counts stay in the strip rather than earning a cell, because a
+// day-by-day chart of "how many sessions" says nothing the number doesn't.
 
 const h = fmt.htmlSafe;
 const money = n => (n == null ? '—' : Math.abs(n) >= 100 ? fmt.usd0(n) : fmt.usd(n));
@@ -39,7 +43,7 @@ function heroModel(totals, range) {
       label: 'Estimated cost',
       value: fmt.usd(cost),
       support: monthly ? `you pay $${monthly}/mo on ${h(plan.label)}` : '',
-      why: costWhy(totals),
+      whyText: costWhy(totals),
     };
   }
 
@@ -61,7 +65,7 @@ function heroModel(totals, range) {
     value: fmt.usd(cost),
     support: (range.days === 30 ? '' : 'at this pace, ')
       + `<b>${times}×</b> your $${monthly}/mo ${h(plan.label)} plan`,
-    why: returnWhy(totals, plan, perMonth, range),
+    whyText: returnWhy(totals, plan, perMonth, range),
   };
 }
 
@@ -83,7 +87,7 @@ function returnWhy(totals, plan, perMonth, range) {
       + gaps.map(g => `${g.model} (${fmt.int(g.billable_tokens)} tokens)`).join(', ')
       + '. Add them to pricing.json and restart.');
   }
-  return tip(parts.join('\n\n'));
+  return parts.join('\n\n');
 }
 
 /** Say what the cost figure actually is, in plain words, including what it leaves out. */
@@ -106,7 +110,7 @@ function costWhy(totals) {
   }
   parts.push('If you\'re on a Max or Pro subscription you didn\'t pay this — it\'s what '
     + 'the same work would have cost per-token.');
-  return tip(parts.join('\n\n'));
+  return parts.join('\n\n');
 }
 
 /** How this period compares with the one before it.
@@ -116,12 +120,22 @@ function costWhy(totals) {
  *  is arithmetically true and says nothing except that the history doesn't go
  *  back far enough — so past 20× it is suppressed and says so instead. And
  *  spending more is up-and-bad, so the arrow reports direction while the colour
- *  reports whether you wanted it. */
+ *  reports whether you wanted it.
+ *
+ *  Returned in two pieces because they belong in two places. The reference sets
+ *  a bare ↑ beside the figure and nothing else — so `chip` rides in the metric
+ *  head, and `vs`, which is a sentence, drops to the note underneath. Putting
+ *  both on the head line pushed a 40-character clause into the same row as the
+ *  number it qualifies. */
 function deltaChip(now, prev, label) {
-  if (!now) return '';
+  if (!now) return { chip: '', vs: '' };
   if (!prev || !isFinite(now / prev) || now / prev >= 20) {
-    return `<span class="muted" title="${prev ? money(prev) + ' in the ' + h(label) : 'nothing recorded in the ' + h(label)}">
-      not enough earlier history to compare</span>`;
+    return {
+      chip: '',
+      vs: prev
+        ? `Not enough earlier history to compare — ${money(prev)} in the ${h(label)}`
+        : 'Not enough earlier history to compare',
+    };
   }
   const ratio = now / prev;
   const pct = Math.round((ratio - 1) * 100);
@@ -133,9 +147,17 @@ function deltaChip(now, prev, label) {
   const size = ratio >= 2 ? `${ratio.toFixed(1)}×`
     : ratio <= 0.5 ? `${(1 / ratio).toFixed(1)}× less`
     : `${Math.abs(pct)}%`;
-  return `<span class="delta ${cls}">${arrow} ${size}</span>
-          <span>vs ${h(label)} (${money(prev)})</span>`;
+  return {
+    chip: `<span class="delta ${cls}">${arrow} ${size}</span>`,
+    vs: `vs ${h(label)} (${money(prev)})`,
+  };
 }
+
+/** The cost cell's sub-line. Three short clauses on one row — what the multiple
+ *  means, how the period compares, and what clicking the chart does — rather
+ *  than three stacked rows of chrome above a chart that is the actual content. */
+const costNote = (hero, delta) =>
+  [hero.support, delta.vs, 'Click any day for its breakdown'].filter(Boolean).join(' · ');
 
 /** Tip titles carry absolute paths. Left whole they wrap to three lines each and
  *  turn the most actionable card on the page into a wall. */
@@ -156,41 +178,91 @@ const WINDOW_WHY = `Claude Code meters you on a rolling window, and this is what
 
 There is no "remaining" figure here on purpose. Your cap is never written to disk — /status asks Anthropic for it live — so any percentage would be a guess dressed up as a measurement. This is the half that can be measured: what you have used, from your own transcripts.`;
 
-/** What has gone through the current rolling window. */
+/** What has gone through the current rolling window.
+ *
+ *  This used to be its own visual register — inline `12px` facts with the values
+ *  bolded mid-sentence — which made it the fifth different kind of row on the
+ *  page. It now reuses the same value-over-label stat pattern as the strip
+ *  beside the picker, so there is one way to show a figure here, not two.
+ *
+ *  It is NOT merged into that strip, though it sits directly under it. These are
+ *  two different time bases: the picker's strip counts the selected range, this
+ *  counts the live rolling window. Putting "5,116 prompts" and "76 prompts" in
+ *  one row under one heading would read as a contradiction. The leader on the
+ *  left is what keeps them straight. */
 function windowStrip(w) {
   if (!w || !w.turns) return '';
   const started = (w.first_activity || w.since).slice(11, 16);
   const billable = w.input_tokens + w.output_tokens
     + w.cache_create_5m_tokens + w.cache_create_1h_tokens;
+  const stat = (v, l) => `<div class="s"><div class="s-v">${v}</div><div class="s-l">${h(l)}</div></div>`;
   return `<div class="window-strip">
-    <span class="dot"></span>
-    <span class="k">Current ${w.hours}h window ${tip(WINDOW_WHY)}</span>
-    <span>since <span class="v">${h(started)}</span></span>
-    <span><span class="v">${fmt.int(w.prompts)}</span> prompts</span>
-    <span><span class="v">${fmt.int(w.turns)}</span> turns</span>
-    <span><span class="v">${fmt.compact(billable)}</span> billable</span>
-    <span><span class="v">${money(w.cost_usd)}</span> of work</span>
+    <div class="ws-lead">
+      <span class="dot"></span>Current ${w.hours}h window ${tip(WINDOW_WHY)}
+    </div>
+    <div class="statstrip">
+      ${stat(h(started), 'since')}
+      ${stat(fmt.int(w.prompts), 'prompts')}
+      ${stat(fmt.int(w.turns), 'turns')}
+      ${stat(fmt.compact(billable), 'billable')}
+      ${stat(money(w.cost_usd), 'of work')}
+    </div>
     <span class="spacer"></span>
-    ${(w.models || []).slice(0, 2).map(m =>
-      `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ')}
+    <div class="ws-models">
+      ${(w.models || []).slice(0, 2).map(m =>
+        `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ')}
+    </div>
   </div>`;
 }
 
-const statTile = ({ label, value, title, spark, why }) => `
-  <div class="card stat clickable" data-metric="${h(spark)}" role="button" tabindex="0"
+/** A metric cell, as the reference draws one: name on the left, figure on the
+ *  right at the same size, the trend filling the rest. No border, no fill — the
+ *  grid gap is what separates them.
+ *
+ *  `key` is the server's own metric key (see METRICS in db.py) and is used for
+ *  all four of the DOM hooks — the drill-down, the live value patch, the chart
+ *  node and the chart's data. One key space, so a rename can't leave three of
+ *  them agreeing and the fourth silently 400ing, which is exactly what had
+ *  happened to cache_read and cache_create. */
+const metricCell = ({ label, value, title, key, why, note, delta, tall, lead, drill = true }) => `
+  <div class="metric${lead ? ' lead' : ''}${drill ? ' clickable' : ''}"${drill
+      ? ` data-metric="${h(key)}" role="button" tabindex="0" title="Open the ${h(label.toLowerCase())} breakdown"`
+      : ''}>
+    <div class="metric-head">
+      <span class="metric-label">${h(label)}${why ? tip(why) : ''}</span>
+      <span class="metric-value" data-statval="${h(key)}" title="${h(title || String(value))}">${value}</span>
+      ${delta || ''}
+    </div>
+    ${note ? `<p class="metric-note" data-note="${h(key)}">${note}</p>` : ''}
+    <div class="metric-chart${tall ? ' tall' : ''}" data-chart="${h(key)}"></div>
+  </div>`;
+
+/** A figure in the strip beside the picker. Counts, not trends: a sparkline of
+ *  "how many sessions per day" says nothing a number doesn't, and the reference
+ *  keeps its strip to bare values for the same reason. */
+const stripStat = ({ label, value, title, key, why }) => `
+  <div class="s clickable" data-metric="${h(key)}" role="button" tabindex="0"
        title="Open the ${h(label.toLowerCase())} breakdown">
-    <div class="stat-label">${h(label)}${why ? tip(why) : ''}</div>
-    <div class="stat-value" data-statval="${h(spark)}" title="${h(title || String(value))}">${value}</div>
-    <div class="stat-spark" data-spark="${h(spark)}"></div>
+    <div class="s-v" data-statval="${h(key)}" title="${h(title || String(value))}">${value}</div>
+    <div class="s-l">${h(label)}${why ? tip(why) : ''}</div>
   </div>`;
 
 /** Ranked horizontal bars beat a grouped bar chart here: project names are long,
  *  the ordering is the message, and a rotated x-axis label is unreadable. */
 function rankedProjects(projects) {
-  const rows = projects
-    .map(p => ({ name: p.project_name || p.project_slug, cost: p.cost_usd || 0, tokens: p.billable_tokens || 0 }))
-    .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens)
+  // Slice FIRST, then label. Labelling the full set and slicing afterwards put
+  // "footy-tourney · Second-Brain" on screen with its sibling ranked out of the
+  // top 7 — a qualifier answering a question the reader cannot see being asked.
+  // Disambiguation is for on-screen ambiguity; the full slug stays in `title`.
+  const top = projects
+    .slice()
+    .sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0)
+                 || (b.billable_tokens || 0) - (a.billable_tokens || 0))
     .slice(0, 7);
+  const label = projectLabeller(top);
+  const rows = top.map(p => ({
+    name: label(p), cost: p.cost_usd || 0, tokens: p.billable_tokens || 0,
+  }));
   if (!rows.length) return '<div class="empty">no projects in this range</div>';
   const max = Math.max(...rows.map(r => r.cost), 0.0001);
   return rows.map(r => `
@@ -242,9 +314,6 @@ function modelSlices(byModel) {
   return big;
 }
 
-const cssVar = name =>
-  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
 // Axis categories are truncated to fit, so a click handler can't read the real
 // key back off the label. Keep the originals alongside.
 const keys = { days: [], models: [], tools: [] };
@@ -259,99 +328,106 @@ export default async function (root) {
   const cacheCreate = (totals.cache_create_5m_tokens || 0) + (totals.cache_create_1h_tokens || 0);
   const prevLabel = range.days ? `previous ${range.days} days` : '';
   const hero = heroModel(totals, range);
+  const costDelta = deltaChip(totals.cost_usd, prevTotals && prevTotals.cost_usd, prevLabel);
 
+  // The picker is the page's title. Overview needs no <h2> of its own — the
+  // sidebar already says where you are, and the reference proves that the
+  // control governing every number below reads better as the heading than a
+  // word that repeats the nav item you just clicked.
   root.innerHTML = `
-    <div class="pagehead">
-      <h2>Overview</h2>
-      <span class="sub">${h(range.days ? `last ${range.days} days` : 'all time')}</span>
-      <span class="spacer"></span>
-      ${rangeControl(range)}
+    <div class="period-head">
+      <div>
+        ${periodControl(range)}
+        <div class="period-sub" id="period-sub">${h(rangeSpan(range))}</div>
+      </div>
+      <div class="statstrip" id="statstrip">
+        ${stripStat({
+          label: 'Sessions', value: fmt.int(totals.sessions), key: 'sessions',
+          why: 'One run of Claude Code, from `claude` to exit. Each session is a single transcript file.',
+        })}
+        ${stripStat({
+          label: 'Prompts', value: fmt.int(totals.turns), key: 'turns',
+          why: 'Messages you actually typed. Tool results are filed as user messages too, but those aren\'t prompts — counting them would inflate this about eightfold.',
+        })}
+      </div>
     </div>
 
     <div id="window-strip">${windowStrip(d.win)}</div>
 
-    <div class="row split">
-      <div class="stack">
-        <div class="card hero">
-          <div class="hero-label" id="hero-label">${hero.label} ${hero.why}</div>
-          <div class="hero-value" id="hero-value">${hero.value}</div>
-          <div class="hero-meta" id="hero-meta">
-            ${deltaChip(totals.cost_usd, prevTotals && prevTotals.cost_usd, prevLabel)}
-            ${hero.support ? `<span>${hero.support}</span>` : ''}
+    <div class="metric-grid one">
+      ${metricCell({
+        // drill:false — "cost" is not one of the server's METRICS, and this
+        // cell's drill-down is per-day off the chart itself, not a breakdown of
+        // the whole figure. Leaving it clickable would send by=metric&key=cost
+        // and 400.
+        label: hero.label, value: hero.value, key: 'cost', tall: true, drill: false, lead: true,
+        why: hero.whyText,
+        delta: costDelta.chip,
+        note: costNote(hero, costDelta),
+      })}
+    </div>
+
+    <div class="metric-grid" style="margin-top:32px">
+      ${metricCell({
+        label: 'Input', value: fmt.compact(totals.input_tokens),
+        title: fmt.int(totals.input_tokens) + ' tokens', key: 'input',
+        why: 'New text sent to Claude — yours and tool results. Billed at the full input rate.',
+      })}
+      ${metricCell({
+        label: 'Output', value: fmt.compact(totals.output_tokens),
+        title: fmt.int(totals.output_tokens) + ' tokens', key: 'output',
+        why: 'Text Claude wrote back. The most expensive rate per token.',
+      })}
+      ${metricCell({
+        label: 'Cache read', value: fmt.compact(totals.cache_read_tokens),
+        title: fmt.int(totals.cache_read_tokens) + ' tokens', key: 'cache_read',
+        why: 'Re-used text billed at a tenth of input — your CLAUDE.md, files already read, the conversation so far. High is good.',
+      })}
+      ${metricCell({
+        label: 'Cache create', value: fmt.compact(cacheCreate),
+        title: fmt.int(cacheCreate) + ' tokens', key: 'cache_create',
+        why: 'Writing something into the cache for the first time. Costs a premium once, then pays for itself on the next turn that reuses it.',
+      })}
+    </div>
+
+    <div class="section">
+      <div class="row split">
+        <div>
+          <div class="section-head">
+            <h3>Where it went</h3>
+            <span class="spacer"></span>
+            <a href="#/activity?view=projects">All projects →</a>
           </div>
-          <div class="hero-chart" id="ch-cost"></div>
-          <p class="card-note" style="margin:0 0 4px">Daily API-equivalent cost. Click any day for its breakdown.</p>
+          <div id="where-body">${rankedProjects(d.projects)}</div>
         </div>
 
-        <div class="row cols-3">
-          ${statTile({
-            label: 'Sessions', value: fmt.int(totals.sessions), spark: 'sessions',
-            why: 'One run of Claude Code, from `claude` to exit. Each session is a single transcript file.',
-          })}
-          ${statTile({
-            label: 'Prompts', value: fmt.int(totals.turns), spark: 'turns',
-            why: 'Messages you actually typed. Tool results are filed as user messages too, but those aren\'t prompts — counting them would inflate this about eightfold.',
-          })}
-          ${statTile({
-            label: 'Input', value: fmt.compact(totals.input_tokens),
-            title: fmt.int(totals.input_tokens) + ' tokens', spark: 'input',
-            why: 'New text sent to Claude — yours and tool results. Billed at the full input rate.',
-          })}
-          ${statTile({
-            label: 'Output', value: fmt.compact(totals.output_tokens),
-            title: fmt.int(totals.output_tokens) + ' tokens', spark: 'output',
-            why: 'Text Claude wrote back. The most expensive rate per token.',
-          })}
-          ${statTile({
-            label: 'Cache read', value: fmt.compact(totals.cache_read_tokens),
-            title: fmt.int(totals.cache_read_tokens) + ' tokens', spark: 'read',
-            why: 'Re-used text billed at a tenth of input — your CLAUDE.md, files already read, the conversation so far. High is good.',
-          })}
-          ${statTile({
-            label: 'Cache create', value: fmt.compact(cacheCreate),
-            title: fmt.int(cacheCreate) + ' tokens', spark: 'create',
-            why: 'Writing something into the cache for the first time. Costs a premium once, then pays for itself on the next turn that reuses it.',
-          })}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <h3>Worth fixing</h3>
-          <span class="spacer"></span>
-          <span class="badge" id="tips-count">${tips.length}</span>
-        </div>
-        <div id="tips-body">
-          ${tips.length === 0
-            ? `<div class="empty">Nothing to flag. Patterns are detected over the last 7 days — check back after more activity.</div>`
-            : tips.slice(0, 4).map(tipCard).join('')
-              + (tips.length > 4 ? `
-                <details class="more">
-                  <summary>${tips.length - 4} more</summary>
-                  ${tips.slice(4).map(tipCard).join('')}
-                </details>` : '')}
+        <div class="donut-col">
+          <div class="section-head"><h3>By model</h3></div>
+          <p class="card-note">Share of API-equivalent cost, not of tokens — a Haiku token and an Opus token are not the same money. Click a slice for its projects.</p>
+          <div id="ch-model" class="chart-donut"></div>
         </div>
       </div>
     </div>
 
-    <div class="row split" style="margin-top:14px">
-      <div class="card">
-        <div class="card-head">
-          <h3>Where it went</h3>
-          <span class="spacer"></span>
-          <a href="#/activity?view=projects" style="font-size:11.5px">all projects →</a>
-        </div>
-        <div id="where-body">${rankedProjects(d.projects)}</div>
+    <div class="section">
+      <div class="section-head">
+        <h3>Worth fixing</h3>
+        <span class="spacer"></span>
+        <span class="badge" id="tips-count">${tips.length}</span>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h3>By model</h3></div>
-        <p class="card-note">Share of API-equivalent cost, not of tokens — a Haiku token and an Opus token are not the same money. Click a slice for its projects.</p>
-        <div id="ch-model" style="height:270px"></div>
+      <div id="tips-body">
+        ${tips.length === 0
+          ? `<div class="empty">Nothing to flag. Patterns are detected over the last 7 days — check back after more activity.</div>`
+          : tips.slice(0, 4).map(tipCard).join('')
+            + (tips.length > 4 ? `
+              <details class="more">
+                <summary>${tips.length - 4} more</summary>
+                ${tips.slice(4).map(tipCard).join('')}
+              </details>` : '')}
       </div>
     </div>
 
-    <details class="card glossary" style="margin-top:14px">
+    <details class="card glossary" style="margin-top:38px">
       <summary><h3 style="margin:0">What do these numbers mean?</h3><span class="muted" style="font-size:11.5px">— click to expand</span></summary>
       <dl>
         <dt>Session</dt><dd>One run of Claude Code (from <code>claude</code> to exit). Each session is a single <code>.jsonl</code> file.</dd>
@@ -365,7 +441,7 @@ export default async function (root) {
     </details>
   `;
 
-  wireRange(root);
+  wirePeriod(root);
   wireDismiss(root);
   wireTiles(root);
   drawCharts(d);
@@ -399,32 +475,43 @@ function wireDismiss(root) {
   });
 }
 
+/** Daily series, keyed the same way as the cells that display them. */
+function seriesFor(daily) {
+  return {
+    cost:         daily.map(x => x.cost_usd ?? 0),
+    input:        daily.map(x => x.input_tokens),
+    output:       daily.map(x => x.output_tokens),
+    cache_read:   daily.map(x => x.cache_read_tokens),
+    cache_create: daily.map(x => x.cache_create_tokens),
+  };
+}
+
 function drawCharts(d) {
   const { daily, byModel } = d;
   keys.days = daily.map(x => x.day);
+  const x = daily.map(v => fmt.day(v.day));
+  const series = seriesFor(daily);
 
-  areaChart(document.getElementById('ch-cost'), {
-    x: daily.map(x => fmt.day(x.day)),
-    values: daily.map(x => x.cost_usd ?? 0),
+  // All five charts are the same green. They are five independent charts, not
+  // five series in one, so a different hue per cell would encode nothing — and
+  // one data colour is the reference's most consistent rule. The label says
+  // which metric it is; the colour has no second job.
+  metricChart(document.querySelector('[data-chart="cost"]'), {
+    x,
+    values: series.cost,
     valueFormatter: v => fmt.usd(v),
-    tickFormatter: v => '$' + fmt.compact(v),
     onSelect: i => openDrawer('day', keys.days[i], fmt.day(keys.days[i])),
   });
 
-  const sparks = {
-    sessions: { values: daily.map(x => x.sessions),            color: cssVar('--ink-3')      },
-    turns:    { values: daily.map(x => x.turns),               color: cssVar('--ink-3')      },
-    input:    { values: daily.map(x => x.input_tokens),        color: cssVar('--tok-input')  },
-    output:   { values: daily.map(x => x.output_tokens),       color: cssVar('--tok-output') },
-    read:     { values: daily.map(x => x.cache_read_tokens),   color: cssVar('--tok-read')   },
-    create:   { values: daily.map(x => x.cache_create_tokens), color: cssVar('--tok-create') },
-  };
-  // No click handler on the sparkline: the whole tile is already the target, and
-  // two different results depending on which pixel you hit is worse than one.
-  $$('[data-spark]').forEach(el => {
-    const s = sparks[el.dataset.spark];
-    if (s) sparkline(el, s.values, s.color);
-  });
+  // No click handler on the token charts: the whole cell is already the target,
+  // and two different results depending on which pixel you hit is worse than one.
+  for (const k of ['input', 'output', 'cache_read', 'cache_create']) {
+    metricChart(document.querySelector(`[data-chart="${k}"]`), {
+      x,
+      values: series[k],
+      valueFormatter: v => fmt.int(v) + ' tokens',
+    });
+  }
 
   const slices = modelSlices(byModel);
   keys.models = slices.map(s => s.model);
@@ -480,6 +567,9 @@ const miniTable = (head, rows) => `
   </table></div>`;
 
 function dayCard(d) {
+  const projLabel = projectLabeller(d.projects);
+  const sessLabel = projectLabeller(d.sessions);
+  const promptLabel = projectLabeller(d.prompts || []);
   const cost = d.models.reduce((s, m) => s + (m.cost_usd || 0), 0);
   const billable = m => (m.input_tokens || 0) + (m.output_tokens || 0)
     + (m.cache_create_5m_tokens || 0) + (m.cache_create_1h_tokens || 0);
@@ -492,7 +582,7 @@ function dayCard(d) {
         <tr>
           <td class="num">${money(p.cost_usd)}</td>
           <td class="blur-sensitive" title="${h(p.prompt_text)}">${h(fmt.short(p.prompt_text, 64))}</td>
-          <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(p.session_id)}">${h(p.project_name || p.project_slug)}</a></td>
+          <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(p.session_id)}">${h(promptLabel(p))}</a></td>
           <td>${(p.models || []).slice(0, 2).map(m =>
             `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ')}</td>
           <td class="num">${fmt.int(p.turns)}</td>
@@ -516,7 +606,7 @@ function dayCard(d) {
         ${miniTable('<th>project</th><th class="num">billable</th><th class="num">cost</th>',
           d.projects.map(p => `
             <tr>
-              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(p.project_name || p.project_slug)}</td>
+              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(projLabel(p))}</td>
               <td class="num">${fmt.compact(p.billable_tokens)}</td>
               <td class="num">${money(p.cost_usd)}</td>
             </tr>`).join(''))}
@@ -527,7 +617,7 @@ function dayCard(d) {
           d.sessions.map(s => `
             <tr>
               <td class="mono">${h((s.started || '').slice(11, 16))}</td>
-              <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(s.session_id)}">${h(s.project_name || s.project_slug)}</a></td>
+              <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(s.session_id)}">${h(sessLabel(s))}</a></td>
               <td class="num">${fmt.int(s.turns)}</td>
               <td class="num">${fmt.compact(s.billable_tokens)}</td>
             </tr>`).join(''))}
@@ -547,14 +637,17 @@ function dayCard(d) {
 
 function modelCard(d) {
   const cost = d.projects.reduce((s, p) => s + (p.cost_usd || 0), 0);
+  // Same rule as rankedProjects: label only what is rendered.
+  const top = d.projects.slice().sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 12);
+  const projLabel = projectLabeller(top);
   return { amount: money(cost), body: `
     <div class="drawer-grid">
       <div>
         <h4>Which projects used it</h4>
         ${miniTable('<th>project</th><th class="num">turns</th><th class="num">cost</th>',
-          d.projects.slice().sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 12).map(p => `
+          top.map(p => `
             <tr>
-              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(p.project_name || p.project_slug)}</td>
+              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(projLabel(p))}</td>
               <td class="num">${fmt.int(p.turns)}</td>
               <td class="num">${money(p.cost_usd)}</td>
             </tr>`).join(''))}
@@ -576,6 +669,11 @@ function modelCard(d) {
  *  pricing a cache-read count would mean re-deriving a number the cost cards
  *  already show properly. */
 function metricCard(d) {
+  // bars() renders only the first 8, so label those 8 — not all of them.
+  // Sorted explicitly because bars() scales widths off the max of what it gets.
+  const topProjects = d.projects.slice().sort((a, b) => (b.value || 0) - (a.value || 0)).slice(0, 8);
+  const projLabel = projectLabeller(topProjects);
+  const sessLabel = projectLabeller(d.sessions);
   const n = v => fmt.int(v);
   const bars = rows => {
     if (!rows.length) return '<div class="empty">nothing in this range</div>';
@@ -588,11 +686,14 @@ function metricCard(d) {
       </div>`).join('');
   };
   const busiest = d.days.slice().sort((a, b) => b.value - a.value).slice(0, 8);
-  return { amount: `${n(d.total)} ${d.label}`, body: `
+  // The overlay's title already names the metric, so the server's label repeated
+  // it — "Input" above "7,264,761 input tokens". Keep the unit, drop the noun.
+  const unit = /tokens$/.test(d.label || '') ? ' tokens' : '';
+  return { amount: `${n(d.total)}${unit}`, body: `
     <div class="drawer-grid">
       <div>
         <h4>By project</h4>
-        ${bars(d.projects.map(p => ({ name: p.project_name || p.project_slug, value: p.value })))}
+        ${bars(topProjects.map(p => ({ name: projLabel(p), value: p.value })))}
       </div>
       <div>
         <h4>${d.models.length ? 'By model' : 'Busiest days'}</h4>
@@ -606,7 +707,7 @@ function metricCard(d) {
           d.sessions.map(x => `
             <tr>
               <td class="mono">${fmt.ts(x.started)}</td>
-              <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(x.session_id)}">${h(x.project_name || x.project_slug)}</a></td>
+              <td class="blur-sensitive"><a href="#/sessions/${encodeURIComponent(x.session_id)}">${h(sessLabel(x))}</a></td>
               <td class="num">${fmt.compact(x.value)}</td>
             </tr>`).join(''))}
       </div>
@@ -623,6 +724,7 @@ function metricCard(d) {
 }
 
 function toolCard(d) {
+  const projLabel = projectLabeller(d.projects);
   return { amount: `${fmt.int(d.totals.calls)} calls · ${fmt.int(d.totals.sessions)} sessions`, body: `
     <div class="drawer-grid">
       <div>
@@ -630,7 +732,7 @@ function toolCard(d) {
         ${miniTable('<th>project</th><th class="num">calls</th><th class="num">result tokens</th>',
           d.projects.map(p => `
             <tr>
-              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(p.project_name || p.project_slug)}</td>
+              <td class="blur-sensitive" title="${h(p.project_slug)}">${h(projLabel(p))}</td>
               <td class="num">${fmt.int(p.calls)}</td>
               <td class="num">${p.result_tokens ? fmt.compact(p.result_tokens) : '<span class="muted">—</span>'}</td>
             </tr>`).join(''))}
@@ -665,21 +767,30 @@ export async function live(root) {
   const prevLabel = range.days ? `previous ${range.days} days` : '';
   const hero = heroModel(totals, range);
 
+  const costDelta = deltaChip(totals.cost_usd, prevTotals && prevTotals.cost_usd, prevLabel);
   const set = (sel, html) => { const el = root.querySelector(sel); if (el) el.innerHTML = html; };
 
-  set('#hero-value', hero.value);
-  set('#hero-meta', deltaChip(totals.cost_usd, prevTotals && prevTotals.cost_usd, prevLabel)
-    + (hero.support ? `<span>${hero.support}</span>` : ''));
-
+  // Every figure is now addressed by its own metric key, so the cost cell and
+  // the five token/count figures all patch through the same two selectors.
   const stats = {
-    sessions: fmt.int(totals.sessions),
-    turns:    fmt.int(totals.turns),
-    input:    fmt.compact(totals.input_tokens),
-    output:   fmt.compact(totals.output_tokens),
-    read:     fmt.compact(totals.cache_read_tokens),
-    create:   fmt.compact(cacheCreate),
+    cost:         hero.value,
+    sessions:     fmt.int(totals.sessions),
+    turns:        fmt.int(totals.turns),
+    input:        fmt.compact(totals.input_tokens),
+    output:       fmt.compact(totals.output_tokens),
+    cache_read:   fmt.compact(totals.cache_read_tokens),
+    cache_create: fmt.compact(cacheCreate),
   };
   for (const [k, v] of Object.entries(stats)) set(`[data-statval="${k}"]`, v);
+
+  // The delta chip is a sibling of the value, not part of it — replace it in
+  // place, and add it if the previous tick had nothing to compare against.
+  const head = root.querySelector('[data-statval="cost"]')?.parentElement;
+  if (head) {
+    head.querySelector('.delta')?.remove();
+    if (costDelta.chip) head.insertAdjacentHTML('beforeend', costDelta.chip);
+  }
+  set('[data-note="cost"]', costNote(hero, costDelta));
 
   set('#where-body', rankedProjects(d.projects));
   set('#tips-count', String(tips.length));
@@ -689,23 +800,14 @@ export async function live(root) {
   // The count is enough to say there's something new to look at.
 
   keys.days = daily.map(x => x.day);
-  patch(root.querySelector('#ch-cost'), {
-    xAxis: { data: daily.map(x => fmt.day(x.day)) },
-    series: [{ data: daily.map(x => x.cost_usd ?? 0) }],
-  });
-
-  const sparkData = {
-    sessions: daily.map(x => x.sessions),
-    turns:    daily.map(x => x.turns),
-    input:    daily.map(x => x.input_tokens),
-    output:   daily.map(x => x.output_tokens),
-    read:     daily.map(x => x.cache_read_tokens),
-    create:   daily.map(x => x.cache_create_tokens),
-  };
-  $$('[data-spark]', root).forEach(el => {
-    const values = sparkData[el.dataset.spark];
-    if (values) patch(el, { xAxis: { data: values.map((_, i) => i) }, series: [{ data: values }] });
-  });
+  const x = daily.map(v => fmt.day(v.day));
+  const series = seriesFor(daily);
+  for (const [k, values] of Object.entries(series)) {
+    patch(root.querySelector(`[data-chart="${k}"]`), {
+      xAxis: { data: x },
+      series: [{ data: values }],
+    });
+  }
 
   const slices = modelSlices(d.byModel);
   keys.models = slices.map(s => s.model);

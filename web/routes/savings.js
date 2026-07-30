@@ -1,4 +1,4 @@
-import { api, fmt, tip, $, $$ } from '/web/app.js';
+import { api, fmt, tip, $, $$, projectLabeller } from '/web/app.js';
 import { openOverlay, closeOverlay, overlayShell, seg, sortable } from '/web/overlay.js';
 
 // Savings — written to be read by someone who has not thought about token
@@ -106,7 +106,7 @@ export default async function (root) {
       <span class="sub">last ${s.history.weeks} weeks</span>
     </div>
 
-    <div class="card">
+    <div class="section tight">
       <p class="lede">
         Over the last <b>${s.history.weeks} weeks</b> your tokens were worth
         <b>${fmt.usd(s.spend.total_usd)}</b>.
@@ -282,7 +282,7 @@ async function draw() {
 
   if (ui.showAll) {
     sortable($('#sv-table', document),
-             ui.list === 'sessions' ? sessionCols(view) : promptCols(view),
+             ui.list === 'sessions' ? sessionCols(view, rows) : promptCols(view, rows),
              rows, view.col);
   }
 }
@@ -293,10 +293,11 @@ async function draw() {
 function bars(rows, view) {
   if (!rows.length) return '<div class="empty">nothing here yet</div>';
   const max = Math.max(...rows.map(r => r[view.col] || 0), 0.0001);
+  const projLabel = projectLabeller(rows);
   return rows.map(r => {
     const value = r[view.col] || 0;
     const isPrompt = r.prompt_text !== undefined;
-    const label = isPrompt ? fmt.short(r.prompt_text, 76) : (r.project_name || r.project_slug);
+    const label = isPrompt ? fmt.short(r.prompt_text, 76) : projLabel(r);
     return `<a class="bar-row" href="#/sessions/${encodeURIComponent(r.session_id)}"
                title="${h(r.prompt_text || r.project_name || r.project_slug)}">
       <span class="bar-name blur-sensitive">${h(label)}
@@ -307,26 +308,29 @@ function bars(rows, view) {
   }).join('');
 }
 
-const projectCol = () => ({
-  key: 'project', label: 'project',
-  value: r => (r.project_name || r.project_slug || '').toLowerCase(),
-  cls: 'blur-sensitive',
-  render: r => `<a href="#/sessions/${encodeURIComponent(r.session_id)}">${h(r.project_name || r.project_slug)}</a>`,
-});
+const projectCol = (rows) => {
+  const label = projectLabeller(rows || []);
+  return {
+    key: 'project', label: 'project',
+    value: r => label(r).toLowerCase(),
+    cls: 'blur-sensitive',
+    render: r => `<a href="#/sessions/${encodeURIComponent(r.session_id)}">${h(label(r))}</a>`,
+  };
+};
 
-const sessionCols = view => [
+const sessionCols = (view, rows) => [
   { key: 'started', label: 'started', cls: 'mono', value: r => r.started || '', render: r => fmt.ts(r.started) },
-  projectCol(),
+  projectCol(rows),
   { key: 'tokens', label: 'billable', num: true, value: r => r.billable_tokens || 0, render: r => fmt.compact(r.billable_tokens) },
   { key: 'cost_usd', label: 'cost', num: true, value: r => r.cost_usd || 0, render: r => fmt.usd(r.cost_usd) },
   { key: 'cache_saved_usd', label: 'saved', num: true, value: r => r.cache_saved_usd || 0, render: r => fmt.usd(r.cache_saved_usd) },
 ];
 
-const promptCols = view => [
+const promptCols = (view, rows) => [
   { key: 'prompt', label: 'prompt', cls: 'blur-sensitive',
     value: r => (r.prompt_text || '').toLowerCase(),
     render: r => `<span title="${h(r.prompt_text)}">${h(fmt.short(r.prompt_text, 70))}</span>` },
-  projectCol(),
+  projectCol(rows),
   { key: 'model', label: 'model', value: r => (r.models || []).join(),
     render: r => (r.models || []).slice(0, 2).map(m =>
       `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ') },
@@ -339,7 +343,7 @@ const promptCols = view => [
 function cacheCard(s) {
   const c = s.cache;
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>Where the caching saving comes from ${tip(TIPS.caching)}</h3>
       <p class="muted" style="margin:0 0 12px">
         ${fmt.compact(c.read_tokens)} tokens were re-read from cache instead of being paid for in full.
@@ -378,12 +382,12 @@ function cacheCard(s) {
 function changeCard(s) {
   const rows = s.change_points;
   if (!rows.length) {
-    return `<div class="card" style="margin-top:14px"><h3>Things that changed</h3>
+    return `<div class="section"><h3>Things that changed</h3>
       <p class="muted">Nothing has dropped sharply enough to flag yet. This needs a couple of weeks either side of a change to spot one.</p></div>`;
   }
   const named = rows.filter(r => r.label).length;
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>Things that changed — what did you do? ${tip(TIPS.changePoints)}</h3>
       <p class="muted" style="margin:0 0 12px">
         On each of these days, something dropped and stayed down. We can see the drop but not the cause —
@@ -430,7 +434,7 @@ function wasteCard(s) {
   const items = w.items.filter(i => i.peak_per_week > 0);
   if (!items.length) return '';
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>Habits that cost tokens ${tip(TIPS.waste)}</h3>
       <p class="muted" style="margin:0 0 12px">
         Where you are now, against the worst week you've ever had.
@@ -464,7 +468,7 @@ function efficiencyCard(s) {
   const peak = Math.max(...pts.map(p => p.tokens_per_turn), 1);
   const better = e.change_pct < 0;
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>What one prompt costs you ${tip(TIPS.perTurn)}</h3>
       <p class="lede" style="font-size:14px">
         One prompt went from <b>${fmt.int(e.first_tokens_per_turn)}</b> tokens to
@@ -488,7 +492,7 @@ function projectionCard(s) {
   const p = s.projection;
   if (!p.last_7d_usd) return '';
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>If nothing changes <span class="badge warn">guess</span> ${tip(TIPS.forecast)}</h3>
       <p class="lede" style="font-size:14px">
         You used <b>${fmt.usd(p.last_7d_usd)}</b> last week. At that pace it's
@@ -508,7 +512,7 @@ function codexCard(s) {
     ? Math.round(100 * c.cache_read_tokens / (c.input_tokens + c.cache_read_tokens))
     : 0;
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3>Codex ${tip(TIPS.codex)}</h3>
       <p class="lede" style="font-size:14px">
         <b>${fmt.int(c.sessions)}</b> Codex runs used <b>${fmt.usd(c.cost_usd)}</b> —
@@ -528,7 +532,7 @@ function unpricedCard(s) {
   const u = s.spend.unpriced_models;
   if (!u.length) return '';
   return `
-    <div class="card" style="margin-top:14px">
+    <div class="section">
       <h3><span class="badge bad">missing</span> Models with no price ${tip(TIPS.gap)}</h3>
       <p class="muted" style="margin:0 0 12px">
         Their tokens are left out of every figure on this page. Add them to <code>pricing.json</code> and restart.

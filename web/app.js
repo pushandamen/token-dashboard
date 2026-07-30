@@ -7,7 +7,10 @@ const COMPACT = new Intl.NumberFormat('en', { notation: 'compact', maximumFracti
 export const fmt = {
   int:   n => (n ?? 0).toLocaleString(),
   compact: n => COMPACT.format(n ?? 0),
-  usd:   n => n == null ? '—' : '$' + Number(n).toFixed(2),
+  // Grouped, not bare toFixed. The hero prints this at 15px next to a donut
+  // whose centre uses usd0 — "$8730.15" beside "$8,730" reads as two different
+  // figures at a glance.
+  usd:   n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   usd0:  n => n == null ? '—' : '$' + Math.round(Number(n)).toLocaleString(),
   usd4:  n => n == null ? '—' : '$' + Number(n).toFixed(4),
   pct:   n => n == null ? '—' : (n * 100).toFixed(0) + '%',
@@ -35,6 +38,68 @@ export const fmt = {
     return `${Number(dd)} ${MON[Number(m) - 1] || ''}`.trim();
   },
 };
+
+/** Label projects so two different directories never render as the same string.
+ *
+ *  Two ways this bites, and both were live. Genuinely distinct directories can
+ *  share a basename — `BA-Vault/Second Brain/personal projects/footy-tourney`
+ *  and `BA-Vault/personal projects/footy-tourney` both call themselves
+ *  "footy-tourney". And a project whose directory was renamed keeps its old
+ *  slug while `best_project_name` falls back to the recorded cwd's tail, so a
+ *  slug ending `Main-Vault` was rendering as "Second Brain" — borrowing a
+ *  different project's name outright.
+ *
+ *  Either way two rows show one name and different numbers, which does more
+ *  damage than a bad label: it makes every other figure on the page look
+ *  approximate. So when names collide, qualify them with the slug segments that
+ *  actually differ.
+ *
+ *  Pass the whole row set; get back a function for one row. */
+export function projectLabeller(rows, nameOf, keyOf) {
+  const name = nameOf || (r => r.project_name || r.project_slug || '');
+  const key  = keyOf  || (r => r.project_slug || '');
+
+  const byName = new Map();
+  for (const r of rows || []) {
+    const n = name(r);
+    if (!byName.has(n)) byName.set(n, new Set());
+    byName.get(n).add(key(r));
+  }
+
+  const qual = new Map();
+  for (const [n, keySet] of byName) {
+    if (keySet.size < 2) continue;
+    // Segment-wise, not character-wise: a character diff can cut mid-word and
+    // yield "Second-Br".
+    const slugs = [...keySet];
+    const parts = slugs.map(s => s.split('-').filter(Boolean));
+    const shortest = Math.min(...parts.map(p => p.length));
+
+    let head = 0;
+    while (head < shortest && parts.every(p => p[head] === parts[0][head])) head++;
+    let tail = 0;
+    while (head + tail < shortest
+           && parts.every(p => p[p.length - 1 - tail] === parts[0][parts[0].length - 1 - tail])) tail++;
+
+    slugs.forEach((s, i) => {
+      const p = parts[i];
+      // Empty means this slug is the short one — its distinguishing feature is
+      // what it sits directly under, so borrow the tail of the shared prefix.
+      const frag = p.slice(head, p.length - tail).join('-')
+        || p.slice(Math.max(0, head - 2), head).join('-');
+      // A fragment that just restates the name adds nothing; leaving that row
+      // bare and marking the others is enough to tell them apart, and it keeps
+      // the canonical project reading cleanly.
+      if (frag && frag.replace(/-/g, ' ').toLowerCase() !== n.toLowerCase()) qual.set(s, frag);
+    });
+  }
+
+  return row => {
+    const n = name(row);
+    const q = qual.get(key(row));
+    return q ? `${n} · ${q}` : n;
+  };
+}
 
 export async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -75,11 +140,13 @@ export function writeParams(patch) {
   location.hash = '#' + hashPath() + (s ? '?' + s : '');
 }
 
+// `label` is the compact form for a segmented control; `long` is what the big
+// period picker says, where it is the largest type on the page.
 export const RANGES = [
-  { key: '7d',  label: '7d',  days: 7 },
-  { key: '30d', label: '30d', days: 30 },
-  { key: '90d', label: '90d', days: 90 },
-  { key: 'all', label: 'All', days: null },
+  { key: '7d',  label: '7d',  long: '7 days',   days: 7 },
+  { key: '30d', label: '30d', long: '30 days',  days: 30 },
+  { key: '90d', label: '90d', long: '90 days',  days: 90 },
+  { key: 'all', label: 'All', long: 'All time', days: null },
 ];
 
 export function readRange() {
@@ -115,6 +182,36 @@ export function rangeControl(range) {
 
 export function wireRange(root) {
   onSeg(root, 'range', key => writeParams({ range: key }));
+}
+
+/** The period picker, set as the page's title.
+ *
+ *  It is the control that changes every number underneath it, which is the
+ *  argument for giving it the largest type on the page rather than parking it
+ *  in a corner as a row of 12px pills. A native <select> on purpose: keyboard
+ *  navigation, type-ahead and the OS touch picker all come free, and a
+ *  hand-rolled popup would buy nothing back. */
+export function periodControl(range) {
+  return `<label class="period">
+    <select class="period-picker" id="period" aria-label="Time range">
+      ${RANGES.map(r =>
+        `<option value="${r.key}"${r.key === range.key ? ' selected' : ''}>${r.long}</option>`).join('')}
+    </select>
+  </label>`;
+}
+
+export function wirePeriod(root) {
+  const el = $('#period', root);
+  if (el) el.addEventListener('change', () => writeParams({ range: el.value }));
+}
+
+/** "Between 30 Jun and 29 Jul" — the span the picker resolves to, spelled out.
+ *  A relative label alone ("30 days") never says which 30. */
+export function rangeSpan(range) {
+  if (!range.days) return 'Everything on record';
+  const d = n => new Date(Date.now() - n * 86400 * 1000);
+  const f = x => `${x.getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]}`;
+  return `Between ${f(d(range.days))} and ${f(d(0))}`;
 }
 
 // --- theme -------------------------------------------------------------------
@@ -207,10 +304,23 @@ const ALIASES = {
   '/tips':     '/overview',
 };
 
+// A rail, not a tab strip. The five Activity views used to hide behind a
+// segmented control inside one tab, which meant Skills and Tools were two
+// clicks and a guess away — a nav item nobody finds is a nav item nobody uses.
+// The rail has room to name all five, so it does.
 const NAV = [
-  { path: '/overview', label: 'Overview' },
-  { path: '/activity', label: 'Activity' },
-  { path: '/savings',  label: 'Savings'  },
+  { items: [{ path: '/overview', label: 'Overview' }] },
+  {
+    label: 'Activity',
+    items: [
+      { path: '/activity', view: 'sessions', label: 'Sessions' },
+      { path: '/activity', view: 'prompts',  label: 'Prompts'  },
+      { path: '/activity', view: 'projects', label: 'Projects' },
+      { path: '/activity', view: 'skills',   label: 'Skills'   },
+      { path: '/activity', view: 'tools',    label: 'Tools'    },
+    ],
+  },
+  { items: [{ path: '/savings', label: 'Savings' }] },
 ];
 
 // A half-filled circle sat next to a sun/moon and read as a second theme
@@ -223,20 +333,29 @@ const EYE_OFF = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"
   <line x1="2" y1="2" x2="22" y2="22"/>
 </svg>`;
 
-function buildTopbar() {
-  const wrap = document.createElement('header');
-  wrap.className = 'topbar';
+function buildSidebar() {
+  const link = i => {
+    const href = '#' + i.path + (i.view ? `?view=${i.view}` : '');
+    return `<a href="${href}" data-route="${i.path}"${i.view ? ` data-view="${i.view}"` : ''}>${i.label}</a>`;
+  };
+  const wrap = document.createElement('aside');
+  wrap.className = 'sidebar';
   wrap.innerHTML = `
     <div class="brand">Token Meter</div>
-    <nav>
-      ${NAV.map(n => `<a href="#${n.path}" data-route="${n.path}">${n.label}</a>`).join('')}
-    </nav>
-    <div class="spacer"></div>
-    <span class="pill" id="plan-pill" title="Billing mode — change in Settings">api</span>
-    <button class="live-pill" id="live-pill" title="New sessions are picked up every 30 seconds"><span class="dot"></span><span id="live-text">live</span></button>
-    <button class="iconbtn" id="blur-toggle" title="Blur prompt text and paths, for screenshots (⌘B)" aria-label="Toggle privacy blur">${EYE_OFF}</button>
-    <button class="iconbtn" id="theme-toggle" aria-label="Switch theme">☀</button>
-    <a class="iconbtn" href="#/settings" data-route="/settings" id="gear" title="Settings" aria-label="Settings">⚙</a>
+    ${NAV.map(g => `
+      <div class="nav-group">
+        ${g.label ? `<div class="nav-group-label">${g.label}</div>` : ''}
+        <nav>${g.items.map(link).join('')}</nav>
+      </div>`).join('')}
+    <div class="rail-spacer"></div>
+    <div class="sidebar-foot">
+      <a class="iconbtn" href="#/settings" data-route="/settings" id="gear" title="Settings" aria-label="Settings">⚙</a>
+      <button class="iconbtn" id="theme-toggle" aria-label="Switch theme">☀</button>
+      <button class="iconbtn" id="blur-toggle" title="Blur prompt text and paths, for screenshots (⌘B)" aria-label="Toggle privacy blur">${EYE_OFF}</button>
+      <span class="spacer"></span>
+      <span class="pill" id="plan-pill" title="Billing mode — change in Settings">api</span>
+      <button class="live-pill" id="live-pill" title="New sessions are picked up every 30 seconds"><span class="dot"></span><span id="live-text">live</span></button>
+    </div>
   `;
   document.body.prepend(wrap);
 
@@ -259,7 +378,14 @@ function toggleBlur() {
 }
 
 function setActiveTab(routeKey) {
-  $$('header.topbar [data-route]').forEach(a => a.classList.toggle('active', a.dataset.route === routeKey));
+  // The five Activity items share one route and differ only by ?view=, so the
+  // path test alone would light all five at once. Default matches activity.js's
+  // own default, or a bare #/activity would highlight nothing.
+  const view = readParam('view', 'sessions');
+  $$('aside.sidebar [data-route]').forEach(a => {
+    a.classList.toggle('active',
+      a.dataset.route === routeKey && (!a.dataset.view || a.dataset.view === view));
+  });
 }
 
 async function render() {
@@ -386,7 +512,7 @@ async function firstRun() {
 }
 
 async function boot() {
-  buildTopbar();
+  buildSidebar();
   installTooltips();
   const planResp = await api('/api/plan');
   state.plan = planResp.plan;

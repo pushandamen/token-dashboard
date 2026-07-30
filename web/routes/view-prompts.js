@@ -1,4 +1,4 @@
-import { api, fmt, tip, readParam, writeParams, segmented, onSeg } from '/web/app.js';
+import { api, fmt, tip, readParam, writeParams, segmented, onSeg, projectLabeller } from '/web/app.js';
 
 const h = fmt.htmlSafe;
 const money = n => (n == null ? '—' : Math.abs(n) >= 100 ? fmt.usd0(n) : fmt.usd(n));
@@ -16,6 +16,7 @@ export async function view(root) {
   const key = readParam('sort', 'tokens');
   const sort = SORTS.find(s => s.key === key) || SORTS[0];
   const rows = await api('/api/prompts?limit=200&sort=' + encodeURIComponent(sort.key));
+  const label = projectLabeller(rows);
 
   root.innerHTML = `
     <div class="card">
@@ -40,7 +41,7 @@ export async function view(root) {
               <tr data-i="${i}" style="cursor:pointer">
                 <td class="num">${money(r.cost_usd)}</td>
                 <td class="blur-sensitive">${h(fmt.short(r.prompt_text, 80))}</td>
-                <td class="blur-sensitive" title="${h(r.project_slug)}">${h(r.project_name || r.project_slug)}</td>
+                <td class="blur-sensitive" title="${h(r.project_slug)}">${h(label(r))}</td>
                 <td>${(r.models || [r.model]).slice(0, 2).map(m =>
                   `<span class="badge ${fmt.modelClass(m)}">${h(fmt.modelShort(m))}</span>`).join(' ')}</td>
                 <td class="num">${fmt.int(r.turns)}</td>

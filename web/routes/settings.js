@@ -24,8 +24,8 @@ export default async function (root) {
       <a href="#/overview">← back to Overview</a>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h3>How you pay</h3></div>
+    <div class="section tight">
+      <div class="section-head"><h3>How you pay</h3></div>
       <p class="card-note">
         Sets how cost is displayed. API mode shows pay-per-token rates; subscription
         modes also show what you actually pay each month.
@@ -39,8 +39,8 @@ export default async function (root) {
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <div class="card-head">
+    <div class="section">
+      <div class="section-head">
         <h3>Pricing table</h3>
         <span class="spacer"></span>
         <span class="badge">${models.length} models</span>
@@ -52,7 +52,7 @@ export default async function (root) {
       </p>
       ${notes.map(n => `<p class="card-note">${h(n)}</p>`).join('')}
       <div class="table-wrap">
-        <table>
+        <table class="pricing">
           <thead><tr>
             <th>model</th><th>tier</th>
             <th class="num">input</th><th class="num">output</th>
@@ -79,15 +79,15 @@ export default async function (root) {
       </p>
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <div class="card-head"><h3>Tier fallbacks</h3></div>
+    <div class="section">
+      <div class="section-head"><h3>Tier fallbacks</h3></div>
       <p class="card-note">
         Used when a model matches no exact row above — a model released after this
         table was written still gets costed, and is flagged as an estimate rather
         than silently dropped.
       </p>
       <div class="table-wrap">
-        <table>
+        <table class="pricing">
           <thead><tr><th>tier</th><th class="num">input</th><th class="num">output</th><th class="num">cache read</th></tr></thead>
           <tbody>
             ${Object.entries(cur.pricing.tier_fallback).map(([k, v]) => `
@@ -102,11 +102,11 @@ export default async function (root) {
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <div class="card-head"><h3>Privacy &amp; appearance</h3></div>
+    <div class="section">
+      <div class="section-head"><h3>Privacy &amp; appearance</h3></div>
       <p class="card-note" style="margin-bottom:6px">
-        <b>⌘/Ctrl + B</b>, or the ◐ button in the header, blurs prompt text and other
-        sensitive content — for screenshots and screen-shares.
+        <b>⌘/Ctrl + B</b>, or the ◐ button at the bottom of the sidebar, blurs prompt
+        text and other sensitive content — for screenshots and screen-shares.
       </p>
       <p class="card-note" style="margin:0">
         The ☀/☾ button switches theme. Your choice is remembered on this machine;
