@@ -18,25 +18,48 @@
         changes every number below it, so it reads as the page's title. This is
         Adaline's most distinctive move and it is the reason its dashboard
         doesn't need a page heading at all.
-     4  ONE DATA COLOUR. A single green, used for every single-series chart,
-        with a vertical gradient that fades to nothing. Categorical hues exist
-        but only appear where there is genuinely more than one series.
-     5  INTER, TABULAR, BUNDLED. The references all run Inter. It is bundled as
-        two woff2 subsets under web/fonts/ rather than fetched from a CDN — this
-        app makes no network calls and that stays true. Inter's `tnum` replaces
-        the old separate monospace for numerals, which is what the references
-        actually do; the mono stack survives for paths and code, where it means
-        "this is a literal string", not "this is a number".
+     4  NO DATA COLOUR AT ALL. Single-series charts are white on dark, black on
+        light, with a vertical gradient fading to nothing. Categorical hues exist
+        but only appear where there is genuinely more than one series in one
+        chart — i.e. the by-model donut, and nowhere else.
+     5  TABULAR FIGURES, BUNDLED FACE. Every changing number sets `tnum`; the
+        mono stack survives only for paths and code, where it means "this is a
+        literal string", not "this is a number".
 
-   ONE DEVIATION FROM THE OLD RULE, ON PURPOSE. The previous stylesheet held
-   --accent to interaction only and banned it from data. That rule existed to
-   fix a real bug: --accent and --tok-input resolved to the same hex, so a donut
-   legend showed two identical colours. Adaline uses its green for both brand
-   and data, and matching it means adopting that. The bug is still prevented,
-   just by the narrower rule that actually caused it: NO TWO SERIES IN ONE
-   LEGEND MAY SHARE A HEX. --cat-1 is the green and the rest are distinct from
-   it, so a single-series chart and the first slice of a pie agree, and nothing
-   collides. --pos/--neg remain a separate channel for direction.
+   ------------------------------------------------------------------------------
+   PROVENANCE. Every value below was read off the real thing, not a screenshot.
+
+   Midday's dashboard is open source, so its tokens are quoted, not inferred:
+   packages/ui/src/globals.css. That file is the authority for the dark palette,
+   the radius, and the chart colours. Adaline's marketing site was extracted live
+   (785 elements, 187 declared custom properties) for its type metrics, radii and
+   motion curves.
+
+   TWO THINGS AN EARLIER VERSION OF THIS FILE CLAIMED, AND BOTH WERE FALSE.
+
+   "The references all run Inter." They do not. Midday runs Hedvig Letters
+   Sans/Serif; Adaline runs Akkurat with Instrument Serif and Newsreader for
+   display. Inter is here as a SUBSTITUTE, and the reason is mechanical, not
+   aesthetic: Hedvig Letters Sans ships a single weight (a 400..700 request to
+   Google Fonts is rejected outright) and exposes no `tnum`. This app separates
+   every label from its figure by weight and re-renders numbers every 30 seconds,
+   so a one-weight face with proportional digits would flatten the hierarchy and
+   make the digits jitter. Akkurat is commercial and cannot ship. Inter is the
+   nearest face that is free, multi-weight and tabular.
+
+   "A single green, matching the reference." Also wrong, twice over. Midday's
+   charts are MONOCHROME — --chart-actual-line is #ffffff, --chart-bar-fill is
+   white, and its --accent is #1c1c1c, a neutral. And Adaline has no green accent
+   either: its whole NEUTRAL RAMP is green-tinted (ink #2b390a / #2e4320, surfaces
+   #fbfdf6 / #f1f3ef), so the green in its dashboard comes from tinting the greys
+   rather than from a hue laid on top. The invented #6dbe8b matched neither. Data
+   is now monochrome, per Midday.
+
+   WHERE THIS DELIBERATELY DIVERGES, AND WHY. Midday's --muted-foreground is
+   #616161, which is 2.75:1 on its own --muted surface — unusable as text. --ink-3
+   is lightened until it clears 4.5:1. --pos has no counterpart in a monochrome
+   system at all; it is a Token Meter addition, because Savings leans on
+   good/bad direction. Both are marked in place below.
    ========================================================================== */
 
 /* --- Inter ---------------------------------------------------------------- */
@@ -67,84 +90,103 @@
 
 /* --- palette -------------------------------------------------------------- */
 
+/* @declared values are quoted from midday packages/ui/src/globals.css, converted
+   from its HSL. @adjusted means the reference value failed contrast here and was
+   moved the minimum distance to clear it. @ours has no counterpart upstream. */
 :root,
 :root[data-theme="light"] {
-  --surface:      #ffffff;
+  --surface:      #ffffff;   /* @declared --background 0 0% 100% */
   --panel:        #ffffff;
-  --panel-sunk:   #f4f4f4;
-  --panel-hover:  #fafafa;
+  /* @declared --card 45 18% 96%. Warm (hue 45) — a measured reference value, not
+     the reflex warm-tint: the canvas above it is a true #ffffff. */
+  --panel-sunk:   #f7f6f3;
+  --panel-hover:  #fbfaf8;
 
-  --chrome:       #fcfcfc;   /* sidebar — a half-step off the canvas */
-  --chrome-line:  #ebebeb;
+  --chrome:       #fcfcfb;   /* sidebar — a half-step off the canvas */
+  --chrome-line:  #dbdad7;
 
-  --line:         #ebebeb;
-  --line-strong:  #d8d8d8;
+  --line:         #dbdad7;   /* @declared --border 45 5% 85% */
+  --line-strong:  #c4c3bf;
 
-  --ink:          #0a0a0a;
-  --ink-2:        #5c5c5c;
-  --ink-3:        #6e6e6e;   /* 5.1:1 on white; do not lighten further */
+  --ink:          #121212;   /* @declared --foreground 0 0% 7% */
+  --ink-2:        #3f3f3f;
+  --ink-3:        #616161;   /* @declared --muted-foreground 0 0% 38% — 5.73:1 here */
 
-  --accent:       #2e8b57;
+  /* @ours. Midday's --primary is a near-black and it has no coloured accent at
+     all; this app needs one interactive hue, and it must carry WHITE text on the
+     Save button, which is what sets how dark it is (white on #2e8b57 was 4.25:1). */
+  --accent:       #256f46;
   --accent-ink:   #ffffff;
-  --accent-soft:  rgba(46, 139, 87, 0.10);
+  --accent-soft:  rgba(37, 111, 70, 0.10);
 
-  --data:         #3d9970;   /* the single-series hue */
-  --data-fade:    rgba(61, 153, 112, 0.20);
+  --data:         #000000;   /* @declared --chart-bar-fill / --chart-gradient-end */
+  --data-fade:    rgba(0, 0, 0, 0.16);
+  --data-2:       #707070;   /* @declared --chart-gradient-start / --chart-pattern-stroke */
 
-  --pos:          #2e8b57;   /* down is good on a cost dashboard — see .delta */
-  --neg:          #c4443c;
-  --warn:         #b07a22;
+  --pos:          #2a7e4f;   /* @ours — see the header note on monochrome */
+  --neg:          #c4443c;   /* @adjusted from --destructive #ef4444 (3.2:1 as text) */
+  --warn:         #94661d;   /* @ours */
 
   --tok-input:    #3e6fa8;
   --tok-output:   #7a5aa8;
-  --tok-create:   #b07a22;
-  --tok-read:     #3d9970;
+  --tok-create:   #94661d;
+  --tok-read:     #2a7e4f;
 
-  /* Categorical. --cat-1 is the data green on purpose: a one-series chart and
-     the first slice of a pie should agree. The rest are distinct from it and
-     from each other, which is the rule that matters. */
-  --cat-1: #3d9970;
+  /* Categorical, and the ONLY place a hue appears in data. --cat-1 no longer
+     mirrors --data: data is monochrome now, and a black first slice next to five
+     coloured ones would read as a hole in the ring. Each clears 4.5:1 as text
+     because the legend prints them. */
+  --cat-1: #2a7e4f;
   --cat-2: #3e6fa8;
-  --cat-3: #b07a22;
+  --cat-3: #94661d;
   --cat-4: #7a5aa8;
   --cat-5: #c4443c;
-  --cat-6: #2e8080;
+  --cat-6: #2c7b7b;
 
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
 }
 
+/* The dark ramp is Midday's, quoted rather than approximated. The old values were
+   all one or two steps too dark — a near-miss on every surface. */
 :root[data-theme="dark"] {
-  --surface:      #0a0a0a;
-  --panel:        #0f0f0f;
-  --panel-sunk:   #171717;
-  --panel-hover:  #141414;
+  --surface:      #0d0d0d;   /* @declared --background 0 0% 5%  (was #0a0a0a) */
+  --panel:        #121212;   /* @declared --card 0 0% 7%         (was #0f0f0f) */
+  --panel-sunk:   #1c1c1c;   /* @declared --muted 0 0% 11%       (was #171717) */
+  --panel-hover:  #171717;
 
-  --chrome:       #0a0a0a;
+  --chrome:       #0d0d0d;
   --chrome-line:  #1c1c1c;
 
-  --line:         #1c1c1c;
-  --line-strong:  #2b2b2b;
+  --line:         #1c1c1c;   /* @declared --border 0 0% 11% — this one was already exact */
+  --line-strong:  #333333;   /* @declared --chart-reference-line-stroke */
 
-  --ink:          #ededed;
-  --ink-2:        #a0a0a0;
-  --ink-3:        #7a7a7a;   /* 4.6:1 on --surface */
+  --ink:          #fafafa;   /* @declared --foreground 0 0% 98% — 18.6:1 on canvas */
+  --ink-2:        #999999;   /* @declared --chart-forecast-line — 5.98:1 on --panel-sunk */
+  /* @adjusted. Midday's --muted-foreground is #616161, which measures 2.75:1 on
+     its own --muted surface — fine for an axis label it never puts text on, not
+     fine here, where --ink-3 carries table headers and every explainer. Lightened
+     to the first value clearing 4.5:1 on --panel-sunk: 4.94:1. */
+  --ink-3:        #8a8a8a;
 
+  /* @ours — Midday's --accent is #1c1c1c, a neutral. See the header note. */
   --accent:       #6dbe8b;
   --accent-ink:   #06120b;
   --accent-soft:  rgba(109, 190, 139, 0.13);
 
-  --data:         #6dbe8b;
-  --data-fade:    rgba(109, 190, 139, 0.22);
+  --data:         #ffffff;   /* @declared --chart-actual-line / --chart-bar-fill */
+  --data-fade:    rgba(255, 255, 255, 0.20);
+  --data-2:       #999999;   /* @declared --chart-line-secondary */
 
-  --pos:          #6dbe8b;
-  --neg:          #e08585;
-  --warn:         #d9a05b;
+  --pos:          #6dbe8b;   /* @ours */
+  --neg:          #ff383b;   /* @declared --destructive 359 100% 61% */
+  --warn:         #d9a05b;   /* @ours */
 
   --tok-input:    #7fa8d9;
   --tok-output:   #b58fd6;
   --tok-create:   #d9a05b;
   --tok-read:     #6dbe8b;
 
+  /* Decoupled from --data for the same reason as light: data is white now. */
   --cat-1: #6dbe8b;
   --cat-2: #7fa8d9;
   --cat-3: #d9a05b;
@@ -159,13 +201,13 @@
    honour the OS preference the old way rather than pinning everyone to light. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --surface: #0a0a0a; --panel: #0f0f0f; --panel-sunk: #171717; --panel-hover: #141414;
-    --chrome: #0a0a0a; --chrome-line: #1c1c1c;
-    --line: #1c1c1c; --line-strong: #2b2b2b;
-    --ink: #ededed; --ink-2: #a0a0a0; --ink-3: #7a7a7a;
+    --surface: #0d0d0d; --panel: #121212; --panel-sunk: #1c1c1c; --panel-hover: #171717;
+    --chrome: #0d0d0d; --chrome-line: #1c1c1c;
+    --line: #1c1c1c; --line-strong: #333333;
+    --ink: #fafafa; --ink-2: #999999; --ink-3: #8a8a8a;
     --accent: #6dbe8b; --accent-ink: #06120b; --accent-soft: rgba(109, 190, 139, 0.13);
-    --data: #6dbe8b; --data-fade: rgba(109, 190, 139, 0.22);
-    --pos: #6dbe8b; --neg: #e08585; --warn: #d9a05b;
+    --data: #ffffff; --data-fade: rgba(255, 255, 255, 0.20); --data-2: #999999;
+    --pos: #6dbe8b; --neg: #ff383b; --warn: #d9a05b;
     --tok-input: #7fa8d9; --tok-output: #b58fd6; --tok-create: #d9a05b; --tok-read: #6dbe8b;
     --cat-1: #6dbe8b; --cat-2: #7fa8d9; --cat-3: #d9a05b; --cat-4: #b58fd6; --cat-5: #e08585; --cat-6: #6fc4c4;
     --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.7);
@@ -176,10 +218,25 @@
 
 :root {
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  /* Inter is a substitute, not a match — see the header. Both references' faces
+     are unusable here: one is single-weight with no tabular figures, the other is
+     commercial. */
   --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 10px;
+
+  /* Both references land on 8px as the workhorse: Midday declares --radius .5rem,
+     Adaline's most-used radius is 10px with 8px and 4px behind it. The old 4/6/10
+     had no 8 in it at all. */
+  --r-sm: 4px;    /* @computed adaline (17 uses) */
+  --r-md: 8px;    /* @declared midday --radius .5rem */
+  --r-lg: 12px;   /* @declared adaline --radius-xl .75rem */
+
+  /* Measured, not defaulted. Midday transitions on 0.15s cubic-bezier(.4,0,.2,1)
+     for 236 of its transitions. Adaline's signature is slower and sharper —
+     0.24s cubic-bezier(.32,.72,0,1), used for the things that enter rather than
+     merely change. The old file used var(--t-state) and the browser's default ease. */
+  --t-state: 150ms cubic-bezier(0.4, 0, 0.2, 1);      /* @computed midday */
+  --t-enter: 240ms cubic-bezier(0.32, 0.72, 0, 1);    /* @computed adaline */
+
   --rail: 204px;   /* sidebar width */
 }
 
@@ -192,7 +249,7 @@ html, body {
   color: var(--ink);
   font-family: var(--sans);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.5;   /* @computed midday 1.43 / adaline 1.44–1.5 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -269,7 +326,7 @@ aside.sidebar {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 110ms, background 110ms;
+  transition: color var(--t-state), background var(--t-state);
 }
 .sidebar nav a:hover { color: var(--ink); background: var(--panel-sunk); }
 .sidebar nav a.active { color: var(--ink); background: var(--panel-sunk); font-weight: 500; }
@@ -339,7 +396,7 @@ main#app {
   color: var(--ink);
   font-size: clamp(23px, 3.2vw, 30px);
   font-weight: 400;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.02em;   /* @computed adaline 30px/-0.6px */
   line-height: 1.08;
 }
 .period::after {
@@ -349,7 +406,7 @@ main#app {
   color: var(--ink-3);
   font-size: 0.5em;
   pointer-events: none;
-  transition: color 110ms;
+  transition: color var(--t-state);
 }
 .period:hover::after { color: var(--ink); }
 .period-picker {
@@ -688,6 +745,34 @@ a.bar-row:hover .bar-name { color: var(--ink); }
   text-align: center;
 }
 
+/* A whole route with nothing in it. Bigger than .empty, which is a slot inside a
+   populated page — this one has to carry a heading and a next step, because on
+   first run it is the entire screen a new user is looking at. Left-aligned and
+   measure-capped: it is prose to read, not a label. */
+.blank {
+  max-width: 56ch;
+  padding: 34px 0 0;
+}
+.blank h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+.blank p {
+  margin: 0 0 12px;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+.blank p:last-child { margin-bottom: 0; }
+.blank code {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
 /* --- segmented control ---------------------------------------------------- */
 
 /* Flattened to the reference's underline tabs. The old inset track with a
@@ -711,7 +796,7 @@ a.bar-row:hover .bar-name { color: var(--ink); }
   font-weight: 400;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 110ms, background 110ms;
+  transition: color var(--t-state), background var(--t-state);
 }
 .seg button:hover, .range-tabs button:hover { color: var(--ink); background: var(--panel-sunk); }
 .seg button.active, .range-tabs button.active {
@@ -741,7 +826,7 @@ th {
   text-transform: none;
   white-space: nowrap;
 }
-tbody tr { transition: background 100ms; }
+tbody tr { transition: background var(--t-state); }
 tbody tr:hover { background: var(--panel-hover); }
 tbody tr:last-child td { border-bottom: 0; }
 td { color: var(--ink-2); }
@@ -796,7 +881,7 @@ button, select {
   background: var(--panel);
   color: var(--ink);
   cursor: pointer;
-  transition: border-color 110ms, background 110ms;
+  transition: border-color var(--t-state), background var(--t-state);
 }
 button:hover, select:hover { border-color: var(--ink-3); }
 
@@ -833,7 +918,7 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  transition: color 110ms, background 110ms;
+  transition: color var(--t-state), background var(--t-state);
 }
 .iconbtn:hover { color: var(--ink); background: var(--panel-sunk); border-color: transparent; }
 .iconbtn.active { color: var(--ink); background: var(--panel-sunk); }
@@ -905,6 +990,18 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
   flex: none;
 }
 .why:hover, .why:focus-visible { color: var(--ink); border-color: var(--ink-3); }
+/* The glyph stays 14px — it is a footnote marker and should not compete with the
+   label beside it. The TOUCH TARGET is expanded to 44px with a pseudo-element,
+   so the hit area meets the guideline without the mark growing. */
+.why::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+.why { position: relative; }
 
 .tipbox {
   position: fixed;
@@ -922,7 +1019,7 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
   opacity: 0;
   visibility: hidden;
   transform: translateY(-3px);
-  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms;
+  transition: opacity var(--t-state) ease, transform var(--t-state) ease, visibility var(--t-state);
 }
 .tipbox.on { opacity: 1; visibility: visible; transform: none; }
 
@@ -940,7 +1037,7 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
   content: "▸";
   color: var(--ink-3);
   font-size: 9px;
-  transition: transform 120ms;
+  transition: transform var(--t-state);
 }
 .glossary[open] summary::before { transform: rotate(90deg); }
 .glossary dl { margin: 16px 0 0; display: grid; grid-template-columns: 150px 1fr; gap: 10px 20px; }
@@ -975,7 +1072,7 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
 /* weekly tokens-per-turn columns */
 .bars { display: flex; align-items: flex-end; gap: 8px; height: 110px; }
 .bar-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 6px; cursor: help; }
-.bar-col .bar-fill { width: 100%; border-radius: 2px 2px 0 0; background: var(--data); transition: opacity 120ms; }
+.bar-col .bar-fill { width: 100%; border-radius: 2px 2px 0 0; background: var(--data); transition: opacity var(--t-state); }
 .bar-col:hover .bar-fill { opacity: 0.7; }
 .bar-lab { font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
@@ -1056,7 +1153,7 @@ button.ghost:hover { color: var(--ink); background: var(--panel-sunk); border-co
   margin-left: 3px;
   font-size: 13px;
   opacity: 0;
-  transition: opacity 110ms;
+  transition: opacity var(--t-state);
 }
 .clickable:hover .tile-label::after,
 .clickable:hover .stat-label::after,
@@ -1089,7 +1186,7 @@ th.sortable {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: color 110ms;
+  transition: color var(--t-state);
 }
 th.sortable:hover { color: var(--ink); }
 th.sortable::after {
@@ -1168,7 +1265,7 @@ th.sortable[aria-sort="ascending"]::after  { content: "↑"; opacity: 1; color: 
   padding: 40px 20px;
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   backdrop-filter: blur(6px);
-  animation: overlay-in 140ms ease-out;
+  animation: overlay-in var(--t-enter);
 }
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -1251,11 +1348,11 @@ th.sortable[aria-sort="ascending"]::after  { content: "↑"; opacity: 1; color: 
 .spacer { flex: 1; }
 hr.divider { border: 0; border-top: 1px solid var(--line); margin: 26px 0; }
 
-.blur-sensitive { transition: filter 120ms; }
+.blur-sensitive { transition: filter var(--t-state); }
 body.privacy-on .blur-sensitive { filter: blur(6px); }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  * { transition-duration: 0.var(--t-state) !important; animation-duration: 0.var(--t-state) !important; }
 }
 
 /* The tile whose breakdown the panel is currently showing. Without this you

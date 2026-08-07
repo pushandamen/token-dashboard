@@ -348,7 +348,7 @@ function cacheCard(s) {
       <p class="muted" style="margin:0 0 12px">
         ${fmt.compact(c.read_tokens)} tokens were re-read from cache instead of being paid for in full.
       </p>
-      <table>
+      <div class="table-wrap"><table>
         <tbody>
           <tr>
             <td>If none of it had been cached</td>
@@ -367,7 +367,7 @@ function cacheCard(s) {
             <td class="num"><b>${fmt.usd(s.spend.total_usd)}</b></td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
       <p class="muted" style="margin-top:10px">
         <b>${c.hit_rate_pct}% of everything Claude read came from cache.</b> ${tip(TIPS.hitRate)}
         ${c.hit_rate_pct >= 90
@@ -394,7 +394,7 @@ function changeCard(s) {
         write in what you changed and it'll be remembered.
         ${named ? `<b>${named} of ${rows.length} named so far.</b>` : ''}
       </p>
-      <table>
+      <div class="table-wrap"><table>
         <thead><tr>
           <th>day</th><th>what dropped</th><th class="num">how much</th>
           <th class="num">worth</th><th>what did you change?</th>
@@ -420,7 +420,7 @@ function changeCard(s) {
               </td>
             </tr>`).join('')}
         </tbody>
-      </table>
+      </table></div>
       <p class="muted" style="margin-top:8px;font-size:11px">
         A weekly dollar figure appears only where the thing that dropped is measured in tokens.
         Counts of file reads don't get one — the tokens a read costs aren't recorded against it,
@@ -439,7 +439,7 @@ function wasteCard(s) {
       <p class="muted" style="margin:0 0 12px">
         Where you are now, against the worst week you've ever had.
       </p>
-      <table>
+      <div class="table-wrap"><table>
         <thead><tr><th>habit</th><th class="num">at your worst</th><th class="num">this week</th><th class="num">change</th><th class="num">worth</th></tr></thead>
         <tbody>
           ${items.map(i => `
@@ -457,7 +457,7 @@ function wasteCard(s) {
               }</td>
             </tr>`).join('')}
         </tbody>
-      </table>
+      </table></div>
     </div>`;
 }
 
@@ -518,13 +518,13 @@ function codexCard(s) {
         <b>${fmt.int(c.sessions)}</b> Codex runs used <b>${fmt.usd(c.cost_usd)}</b> —
         ${((100 * c.cost_usd) / (s.spend.total_usd || 1)).toFixed(1)}% of your total.
       </p>
-      <table>
+      <div class="table-wrap"><table>
         <tbody>
           <tr><td>Model</td><td class="num">${c.models.map(m => `<span class="badge ${fmt.modelClass(m)}">${h(m)}</span>`).join(' ')}</td></tr>
           <tr><td>Text it read</td><td class="num">${fmt.compact(c.input_tokens + c.cache_read_tokens)} <span class="muted">(${cachedPct}% cached)</span></td></tr>
           <tr><td>Text it wrote</td><td class="num">${fmt.compact(c.output_tokens)} <span class="muted">incl. ${fmt.compact(c.reasoning_tokens)} thinking</span></td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>`;
 }
 
@@ -537,10 +537,10 @@ function unpricedCard(s) {
       <p class="muted" style="margin:0 0 12px">
         Their tokens are left out of every figure on this page. Add them to <code>pricing.json</code> and restart.
       </p>
-      <table>
+      <div class="table-wrap"><table>
         <thead><tr><th>model</th><th class="num">tokens</th></tr></thead>
         <tbody>${u.map(m => `<tr><td>${h(m.model)}</td><td class="num">${fmt.int(m.billable_tokens)}</td></tr>`).join('')}</tbody>
-      </table>
+      </table></div>
     </div>`;
 }
 

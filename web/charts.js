@@ -26,12 +26,14 @@ function theme() {
     lineStrong: css('--line-strong'),
     panel: css('--panel'),
     accent: css('--accent'),
-    // The reference's single data hue. Every one-series chart is this green;
-    // --cat-* only comes out when there is genuinely more than one series.
+    // Monochrome, per Midday's own --chart-actual-line / --chart-bar-fill: white
+    // on dark, black on light. There is no data hue.
     data:  css('--data'),
-    // --cat-*, not --tok-* + --accent: several of those resolve to the same
-    // hex, which put two identical colours in one donut legend. --cat-1 IS the
-    // data green by design, so a lone series and a first slice agree.
+    data2: css('--data-2'),   // --chart-line-secondary / --chart-gradient-start
+    // --cat-* only comes out where one chart holds more than one series, which
+    // in this app is the by-model donut and nothing else. Deliberately NOT tied
+    // to --data any more: a black first slice beside five coloured ones reads as
+    // a gap in the ring rather than a series.
     series: [
       css('--cat-1'), css('--cat-2'), css('--cat-3'),
       css('--cat-4'), css('--cat-5'), css('--cat-6'),
@@ -206,7 +208,7 @@ export function metricChart(el, { x, values, color, valueFormatter, onSelect }) 
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [
-            { offset: 0, color: hue + '4a' },
+            { offset: 0, color: hue + '33' },
             { offset: 1, color: hue + '00' },
           ],
         },
@@ -269,7 +271,22 @@ export function barChart(el, { categories, values, color, horizontal, onSelect }
 
 export function donutChart(el, data, {
   formatter, onSelect, centerLabel, centerValue, valueFormat = v => String(v),
+  empty = 'nothing to break down yet',
 } = {}) {
+  if (!el) return null;
+
+  // With no slices ECharts falls back to its own placeholder ring, which on a
+  // near-black canvas draws a large light-grey circle — the brightest object on
+  // the page, meaning nothing. An empty set is not a chart, so say so instead.
+  if (!data || !data.length || !data.some(d => (d.value || 0) > 0)) {
+    const existing = echarts.getInstanceByDom(el);
+    if (existing) existing.dispose();
+    el.innerHTML = `<div class="empty">${empty}</div>`;
+    el.style.height = 'auto';
+    return null;
+  }
+  el.style.removeProperty('height');
+
   const c = mount(el);
   if (!c) return null;
   bindResize();

@@ -320,10 +320,47 @@ const keys = { days: [], models: [], tools: [] };
 
 // --- render ------------------------------------------------------------------
 
-export default async function (root) {
+/** Overview with nothing to show.
+ *
+ *  Rendering the normal page against an empty database produced five empty chart
+ *  wells, a column of zeros and no next step — which is what a stranger sees on
+ *  first run, since the scan has not happened yet. Savings already knew to say
+ *  "Nothing scanned yet"; Overview, the landing route, did not.
+ *
+ *  Two different nothings, and telling them apart is the whole value: an empty
+ *  DATABASE needs a command, an empty RANGE needs a wider range. The period head
+ *  stays above this either way, so the picker is still there to widen. */
+function emptyOverview(scanned) {
+  if (!scanned) {
+    return `<div class="blank">
+      <h3>Nothing scanned yet</h3>
+      <p>Token Meter reads the transcripts Claude Code writes to
+        <code>~/.claude/projects</code>. Nothing has been read into the database
+        yet, so there is nothing to cost.</p>
+      <p>Run <code>python3 cli.py scan</code> in the project directory, then reload
+        this page. A first scan over a lot of history takes a few minutes; after
+        that it only reads what is new.</p>
+    </div>`;
+  }
+  return `<div class="blank">
+      <h3>Nothing in this range</h3>
+      <p>There is usage on record, just none inside the window you picked. Choose a
+        wider range above — <b>All time</b> will always show something.</p>
+    </div>`;
+}
+
+export default async function renderOverview(root) {
   const range = readRange();
   const d = await load(range);
   const { totals, prevTotals, tips } = d;
+
+  // Nothing in the selected window. One extra request, and only on this path, to
+  // find out whether the database is empty or just this range is.
+  const blank = !totals.sessions && !d.daily.length;
+  let everScanned = true;
+  if (blank) {
+    try { everScanned = !!(await api('/api/overview')).sessions; } catch { everScanned = false; }
+  }
 
   const cacheCreate = (totals.cache_create_5m_tokens || 0) + (totals.cache_create_1h_tokens || 0);
   const prevLabel = range.days ? `previous ${range.days} days` : '';
@@ -334,7 +371,7 @@ export default async function (root) {
   // sidebar already says where you are, and the reference proves that the
   // control governing every number below reads better as the heading than a
   // word that repeats the nav item you just clicked.
-  root.innerHTML = `
+  const head = `
     <div class="period-head">
       <div>
         ${periodControl(range)}
@@ -350,8 +387,9 @@ export default async function (root) {
           why: 'Messages you actually typed. Tool results are filed as user messages too, but those aren\'t prompts — counting them would inflate this about eightfold.',
         })}
       </div>
-    </div>
+    </div>`;
 
+  const body = blank ? emptyOverview(everScanned) : `
     <div id="window-strip">${windowStrip(d.win)}</div>
 
     <div class="metric-grid one">
@@ -438,13 +476,14 @@ export default async function (root) {
         <dt>Cache create</dt><dd>Writing something into the cache for the first time. A one-time premium that pays off on the next turn.</dd>
         <dt>Billable tokens</dt><dd>Input + output + cache create. Cache reads are billed separately, and much cheaper.</dd>
       </dl>
-    </details>
-  `;
+    </details>`;
+
+  root.innerHTML = head + body;
 
   wirePeriod(root);
   wireDismiss(root);
   wireTiles(root);
-  drawCharts(d);
+  if (!blank) drawCharts(d);
 }
 
 const METRIC_LABEL = {
@@ -760,6 +799,9 @@ function toolCard(d) {
  *  open drawer and the "N more" fold, and restarted every chart animation. This
  *  writes new numbers into the DOM that's already there, so the page just ticks. */
 export async function live(root) {
+  // The empty state has none of the nodes the patches below target, so a scan
+  // that finally finds data has to re-render rather than write into nothing.
+  if (root.querySelector('.blank')) return void (await renderOverview(root));
   const range = readRange();
   const d = await load(range);
   const { totals, prevTotals, daily, tips } = d;
